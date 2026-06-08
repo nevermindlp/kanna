@@ -12,6 +12,7 @@ import { DiffStore } from "./diff-store"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
+import { readClaudeProviderSnapshot, validateClaudeProviderCredentials, writeClaudeProviderSnapshot } from "./claude-provider"
 import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
@@ -109,6 +110,7 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"))
   await appSettings.initialize()
   await keybindings.initialize()
+  await readClaudeProviderSnapshot()
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -150,6 +152,11 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       read: readLlmProviderSnapshot,
       write: writeLlmProviderSnapshot,
       validate: validateLlmProviderCredentials,
+    },
+    claudeProvider: {
+      read: readClaudeProviderSnapshot,
+      write: writeClaudeProviderSnapshot,
+      validate: validateClaudeProviderCredentials,
     },
     refreshDiscovery,
     getDiscoveredProjects: () => discoveredProjects,

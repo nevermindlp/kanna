@@ -479,6 +479,29 @@ export interface LlmProviderValidationResult {
   error: unknown | null
 }
 
+export interface ClaudeProviderFile {
+  apiKey?: string
+  baseUrl?: string | null
+  customModels?: string[]
+  defaultModel?: string
+}
+
+export interface ClaudeProviderSnapshot {
+  apiKey: string
+  baseUrl: string
+  customModels: string[]
+  defaultModel: string
+  enabled: boolean
+  usesCustomEndpoint: boolean
+  warning: string | null
+  filePathDisplay: string
+}
+
+export interface ClaudeProviderValidationResult {
+  ok: boolean
+  error: unknown | null
+}
+
 export type UpdateStatus =
   | "idle"
   | "checking"

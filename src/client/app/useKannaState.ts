@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
 import { useNavigate } from "react-router-dom"
 import { useShallow } from "zustand/react/shallow"
-import { PROVIDERS, type AgentProvider, type AppSettingsPatch, type AppSettingsSnapshot, type AskUserQuestionAnswerMap, type ChatAttachment, type ChatDiffSnapshot, type ChatHistoryPage, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateInstallResult, type UpdateSnapshot, type UserPromptEntry } from "../../shared/types"
+import { PROVIDERS, type AgentProvider, type AppSettingsPatch, type AppSettingsSnapshot, type AskUserQuestionAnswerMap, type ChatAttachment, type ChatDiffSnapshot, type ChatHistoryPage, type ClaudeProviderSnapshot, type ClaudeProviderValidationResult, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateInstallResult, type UpdateSnapshot, type UserPromptEntry } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, type ComposerState, useChatPreferencesStore } from "../stores/chatPreferencesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
@@ -643,6 +643,7 @@ export interface KannaState {
   keybindings: KeybindingsSnapshot | null
   appSettings: AppSettingsSnapshot | null
   llmProvider: LlmProviderSnapshot | null
+  claudeProvider: ClaudeProviderSnapshot | null
   connectionStatus: SocketStatus
   sidebarReady: boolean
   localProjectsReady: boolean
@@ -687,6 +688,9 @@ export interface KannaState {
   handleReadLlmProvider: () => Promise<void>
   handleWriteLlmProvider: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<void>
   handleValidateLlmProvider: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<LlmProviderValidationResult>
+  handleReadClaudeProvider: () => Promise<void>
+  handleWriteClaudeProvider: (value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">) => Promise<void>
+  handleValidateClaudeProvider: (value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">) => Promise<ClaudeProviderValidationResult>
   handleSignOut: () => Promise<void>
   handleSend: (content: string, options?: { provider?: AgentProvider; model?: string; modelOptions?: ModelOptions; planMode?: boolean }) => Promise<void>
   handleSteerQueuedMessage: (queuedMessageId: string) => Promise<void>
@@ -742,6 +746,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   const [keybindings, setKeybindings] = useState<KeybindingsSnapshot | null>(null)
   const [appSettings, setAppSettings] = useState<AppSettingsSnapshot | null>(null)
   const [llmProvider, setLlmProvider] = useState<LlmProviderSnapshot | null>(null)
+  const [claudeProvider, setClaudeProvider] = useState<ClaudeProviderSnapshot | null>(null)
   const [connectionStatus, setConnectionStatus] = useState<SocketStatus>("connecting")
   const [sidebarReady, setSidebarReady] = useState(false)
   const [localProjectsReady, setLocalProjectsReady] = useState(false)
@@ -992,6 +997,47 @@ export function useKannaState(activeChatId: string | null): KannaState {
     })
   }, [socket])
 
+  const handleReadClaudeProvider = useCallback(async () => {
+    try {
+      const snapshot = await socket.command<ClaudeProviderSnapshot>({ type: "settings.readClaudeProvider" })
+      setClaudeProvider(snapshot)
+      setCommandError(null)
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+    }
+  }, [socket])
+
+  const handleWriteClaudeProvider = useCallback(async (
+    value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">
+  ) => {
+    try {
+      const snapshot = await socket.command<ClaudeProviderSnapshot>({
+        type: "settings.writeClaudeProvider",
+        apiKey: value.apiKey,
+        baseUrl: value.baseUrl,
+        customModels: value.customModels,
+        defaultModel: value.defaultModel,
+      })
+      setClaudeProvider(snapshot)
+      setCommandError(null)
+    } catch (error) {
+      setCommandError(error instanceof Error ? error.message : String(error))
+      throw error
+    }
+  }, [socket])
+
+  const handleValidateClaudeProvider = useCallback(async (
+    value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">
+  ) => {
+    return await socket.command<ClaudeProviderValidationResult>({
+      type: "settings.validateClaudeProvider",
+      apiKey: value.apiKey,
+      baseUrl: value.baseUrl,
+      customModels: value.customModels,
+      defaultModel: value.defaultModel,
+    })
+  }, [socket])
+
   useEffect(() => {
     if (connectionStatus !== "connected") return
     void handleReadAppSettings()
@@ -1006,6 +1052,11 @@ export function useKannaState(activeChatId: string | null): KannaState {
       .then(clearLegacyBrowserSettings)
       .catch(() => undefined)
   }, [appSettings?.browserSettingsMigrated, connectionStatus, handleWriteAppSettings])
+
+  useEffect(() => {
+    if (connectionStatus !== "connected") return
+    void handleReadClaudeProvider()
+  }, [connectionStatus, handleReadClaudeProvider])
 
   useEffect(() => {
     if (connectionStatus !== "connected") return
@@ -2022,6 +2073,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     keybindings,
     appSettings,
     llmProvider,
+    claudeProvider,
     connectionStatus,
     sidebarReady,
     localProjectsReady,
@@ -2066,6 +2118,9 @@ export function useKannaState(activeChatId: string | null): KannaState {
     handleReadLlmProvider,
     handleWriteLlmProvider,
     handleValidateLlmProvider,
+    handleReadClaudeProvider,
+    handleWriteClaudeProvider,
+    handleValidateClaudeProvider,
     handleSignOut,
     handleSend,
     handleSteerQueuedMessage,

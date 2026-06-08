@@ -27,6 +27,7 @@ import {
   normalizeServerModel,
 } from "./provider-catalog"
 import { resolveClaudeApiModelId } from "../shared/types"
+import { buildClaudeSessionEnv, isCustomClaudeModel } from "./claude-provider"
 import { fallbackTitleFromMessage } from "./generate-title"
 
 const CLAUDE_TOOLSET = [
@@ -630,7 +631,7 @@ async function startClaudeSession(args: {
       tools: [...CLAUDE_TOOLSET],
       settingSources: ["user", "project", "local"],
       pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE?.replace(/^~(?=\/|$)/, homedir()) || undefined,
-      env: (() => { const { CLAUDECODE: _, ...env } = process.env; return env })(),
+      env: buildClaudeSessionEnv(process.env),
     },
   })
 
@@ -757,10 +758,11 @@ export class AgentCoordinator {
     const catalog = getServerProviderCatalog(provider)
     if (provider === "claude") {
       const model = normalizeServerModel(provider, options.model)
+      const isCustomModel = isCustomClaudeModel(model)
       const modelOptions = normalizeClaudeModelOptions(model, options.modelOptions, options.effort)
       return {
-        model: resolveClaudeApiModelId(model, modelOptions.contextWindow),
-        effort: modelOptions.reasoningEffort,
+        model: isCustomModel ? model : resolveClaudeApiModelId(model, modelOptions.contextWindow),
+        effort: isCustomModel ? undefined : modelOptions.reasoningEffort,
         serviceTier: undefined,
         planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
       }

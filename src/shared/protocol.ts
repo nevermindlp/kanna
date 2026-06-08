@@ -89,6 +89,21 @@ export type ClientCommand =
   | { type: "settings.writeAppSettings"; analyticsEnabled: boolean }
   | { type: "settings.writeAppSettingsPatch"; patch: AppSettingsPatch }
   | { type: "settings.readLlmProvider" }
+  | { type: "settings.readClaudeProvider" }
+  | {
+      type: "settings.writeClaudeProvider"
+      apiKey: string
+      baseUrl: string
+      customModels: string[]
+      defaultModel: string
+    }
+  | {
+      type: "settings.validateClaudeProvider"
+      apiKey: string
+      baseUrl: string
+      customModels: string[]
+      defaultModel: string
+    }
   | { type: "skills.search"; query: string; limit?: number }
   | { type: "skills.install"; source: string; skillId: string }
   | { type: "skills.uninstall"; skillId: string }

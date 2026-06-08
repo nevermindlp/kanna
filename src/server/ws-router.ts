@@ -27,6 +27,8 @@ import type {
   InstalledSkillsSnapshot,
   LlmProviderSnapshot,
   LlmProviderValidationResult,
+  ClaudeProviderSnapshot,
+  ClaudeProviderValidationResult,
   SkillInstallResult,
   SkillSearchSnapshot,
   SkillUninstallResult,
@@ -127,6 +129,11 @@ interface CreateWsRouterArgs {
     read: () => Promise<LlmProviderSnapshot>
     write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<LlmProviderSnapshot>
     validate: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<LlmProviderValidationResult>
+  }
+  claudeProvider?: {
+    read: () => Promise<ClaudeProviderSnapshot>
+    write: (value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">) => Promise<ClaudeProviderSnapshot>
+    validate: (value: Pick<ClaudeProviderSnapshot, "apiKey" | "baseUrl" | "customModels" | "defaultModel">) => Promise<ClaudeProviderValidationResult>
   }
   refreshDiscovery: () => Promise<DiscoveredProject[]>
   getDiscoveredProjects: () => DiscoveredProject[]
@@ -382,6 +389,7 @@ export function createWsRouter({
   appSettings,
   analytics,
   llmProvider,
+  claudeProvider,
   refreshDiscovery,
   getDiscoveredProjects,
   machineDisplayName,
@@ -445,6 +453,40 @@ export function createWsRouter({
       error: {
         type: "config_error",
         message: "LLM provider validation unavailable.",
+      },
+    }),
+  }
+  const resolvedClaudeProvider = claudeProvider ?? {
+    read: async () => ({
+      apiKey: "",
+      baseUrl: "",
+      customModels: [],
+      defaultModel: "",
+      enabled: false,
+      usesCustomEndpoint: false,
+      warning: null,
+      filePathDisplay: "~/.kanna/claude-provider.json",
+    }),
+    write: async ({ apiKey, baseUrl, customModels, defaultModel }: {
+      apiKey: string
+      baseUrl: string
+      customModels: string[]
+      defaultModel: string
+    }) => ({
+      apiKey,
+      baseUrl,
+      customModels,
+      defaultModel,
+      enabled: Boolean(apiKey && baseUrl && customModels.length > 0),
+      usesCustomEndpoint: Boolean(baseUrl),
+      warning: null,
+      filePathDisplay: "~/.kanna/claude-provider.json",
+    }),
+    validate: async () => ({
+      ok: false,
+      error: {
+        type: "config_error",
+        message: "Claude provider validation unavailable.",
       },
     }),
   }
@@ -1135,6 +1177,31 @@ export function createWsRouter({
           if (command.patch.analyticsEnabled !== undefined && !previousAnalyticsEnabled && snapshot.analyticsEnabled) {
             resolvedAnalytics.track("analytics_enabled")
           }
+          return
+        }
+        case "settings.readClaudeProvider": {
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await resolvedClaudeProvider.read() })
+          return
+        }
+        case "settings.writeClaudeProvider": {
+          const snapshot = await resolvedClaudeProvider.write({
+            apiKey: command.apiKey,
+            baseUrl: command.baseUrl,
+            customModels: command.customModels,
+            defaultModel: command.defaultModel,
+          })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          scheduleBroadcast()
+          return
+        }
+        case "settings.validateClaudeProvider": {
+          const result = await resolvedClaudeProvider.validate({
+            apiKey: command.apiKey,
+            baseUrl: command.baseUrl,
+            customModels: command.customModels,
+            defaultModel: command.defaultModel,
+          })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
           return
         }
         case "settings.readLlmProvider": {

@@ -417,6 +417,15 @@ export function ChangelogSection({
   )
 }
 
+function parseCustomModelsText(value: string) {
+  return [...new Set(
+    value
+      .split(/[,\n]/u)
+      .map((entry) => entry.trim())
+      .filter(Boolean)
+  )]
+}
+
 function GitHubIcon({ className }: { className?: string }) {
   return (
     <svg
@@ -832,6 +841,7 @@ export function SettingsPage() {
   const keybindings = state.keybindings
   const appSettings = state.appSettings
   const llmProvider = state.llmProvider
+  const claudeProvider = state.claudeProvider
   const defaultProvider = useChatPreferencesStore((store) => store.defaultProvider)
   const providerDefaults = useChatPreferencesStore((store) => store.providerDefaults)
   const setDefaultProvider = useChatPreferencesStore((store) => store.setDefaultProvider)
@@ -857,11 +867,21 @@ export function SettingsPage() {
   const [llmValidationStatus, setLlmValidationStatus] = useState<"idle" | "valid" | "invalid">("idle")
   const [llmValidationError, setLlmValidationError] = useState<unknown | null>(null)
   const [llmValidationDialogOpen, setLlmValidationDialogOpen] = useState(false)
+  const [claudeProviderDraft, setClaudeProviderDraft] = useState({
+    apiKey: "",
+    baseUrl: "",
+    customModelsText: "",
+    defaultModel: "",
+  })
+  const [claudeProviderError, setClaudeProviderError] = useState<string | null>(null)
   const updateSnapshot = state.updateSnapshot
   const handleWriteAppSettings = state.handleWriteAppSettings
   const handleReadLlmProvider = state.handleReadLlmProvider
   const handleWriteLlmProvider = state.handleWriteLlmProvider
   const handleValidateLlmProvider = state.handleValidateLlmProvider
+  const handleReadClaudeProvider = state.handleReadClaudeProvider
+  const handleWriteClaudeProvider = state.handleWriteClaudeProvider
+  const handleValidateClaudeProvider = state.handleValidateClaudeProvider
   const updateStatusLabel = updateSnapshot?.status === "checking"
     ? "Checking for updates…"
     : updateSnapshot?.status === "updating"
@@ -908,6 +928,16 @@ export function SettingsPage() {
   }, [llmProvider])
 
   useEffect(() => {
+    if (!claudeProvider) return
+    setClaudeProviderDraft({
+      apiKey: claudeProvider.apiKey,
+      baseUrl: claudeProvider.baseUrl,
+      customModelsText: claudeProvider.customModels.join(", "),
+      defaultModel: claudeProvider.defaultModel,
+    })
+  }, [claudeProvider])
+
+  useEffect(() => {
     setLlmValidationStatus("idle")
     setLlmValidationError(null)
   }, [llmProviderDraft.provider, llmProviderDraft.apiKey, llmProviderDraft.model, llmProviderDraft.baseUrl])
@@ -949,7 +979,8 @@ export function SettingsPage() {
   useEffect(() => {
     if (selectedPage !== "providers" || isConnecting) return
     void handleReadLlmProvider()
-  }, [handleReadLlmProvider, isConnecting, selectedPage])
+    void handleReadClaudeProvider()
+  }, [handleReadClaudeProvider, handleReadLlmProvider, isConnecting, selectedPage])
 
   useEffect(() => {
     if (selectedPage !== "changelog" || isConnecting) return
@@ -1129,6 +1160,36 @@ export function SettingsPage() {
       })
     } catch (error) {
       setKeybindingsError(error instanceof Error ? error.message : "Unable to save keybindings.")
+    }
+  }
+
+  async function commitClaudeProvider(nextDraft = claudeProviderDraft) {
+    const customModels = parseCustomModelsText(nextDraft.customModelsText)
+    const defaultModel = nextDraft.defaultModel.trim() || customModels[0] || ""
+    const payload = {
+      apiKey: nextDraft.apiKey.trim(),
+      baseUrl: nextDraft.baseUrl.trim(),
+      customModels,
+      defaultModel,
+    }
+
+    try {
+      setClaudeProviderError(null)
+      await handleWriteClaudeProvider(payload)
+      const validation = await handleValidateClaudeProvider(payload)
+      if (!validation.ok) {
+        setClaudeProviderError(
+          validation.error && typeof validation.error === "object" && "message" in validation.error
+            ? String((validation.error as { message?: unknown }).message)
+            : "Claude provider validation failed."
+        )
+      }
+      if (payload.baseUrl && defaultModel) {
+        setProviderDefaultModel("claude", defaultModel)
+        void handleWriteAppSettings({ providerDefaults: { claude: { model: defaultModel } } }).catch(() => undefined)
+      }
+    } catch (error) {
+      setClaudeProviderError(error instanceof Error ? error.message : "Unable to save Claude provider settings.")
     }
   }
 
@@ -1690,6 +1751,58 @@ export function SettingsPage() {
                           onPlanModeChange={(planMode) => handleProviderDefaultPlanModeChange("codex", planMode)}
                           includePlanMode
                           className="justify-start flex-wrap"
+                        />
+                      </div>
+                    </SettingsRow>
+
+                    <SettingsRow
+                      title="Claude Code API"
+                      description={(
+                        <>
+                          Configure API key authentication for Claude Code. Use a custom Anthropic-compatible endpoint (for example GLM) and list the model ids your provider supports. Stored in {claudeProvider?.filePathDisplay ?? "the active claude-provider.json file"}.
+                        </>
+                      )}
+                      alignStart
+                    >
+                      <div className="flex w-full max-w-[420px] flex-col gap-3">
+                        {claudeProviderError ? (
+                          <div className="rounded-lg border border-destructive/20 bg-destructive/5 px-4 py-3 text-sm text-destructive">
+                            {claudeProviderError}
+                          </div>
+                        ) : null}
+                        {claudeProvider?.warning ? (
+                          <div className="rounded-lg border border-border bg-card/30 px-4 py-3 text-sm text-muted-foreground">
+                            {claudeProvider.warning}
+                          </div>
+                        ) : null}
+                        <Input
+                          type="password"
+                          value={claudeProviderDraft.apiKey}
+                          onChange={(event) => setClaudeProviderDraft((current) => ({ ...current, apiKey: event.target.value }))}
+                          onBlur={() => void commitClaudeProvider()}
+                          onKeyDown={(event) => handleTextInputKeyDown(event, () => void commitClaudeProvider())}
+                          placeholder="API key (ANTHROPIC_API_KEY)"
+                        />
+                        <Input
+                          value={claudeProviderDraft.baseUrl}
+                          onChange={(event) => setClaudeProviderDraft((current) => ({ ...current, baseUrl: event.target.value }))}
+                          onBlur={() => void commitClaudeProvider()}
+                          onKeyDown={(event) => handleTextInputKeyDown(event, () => void commitClaudeProvider())}
+                          placeholder="https://api-ap-southeast-1.modelarts-maas.com/anthropic"
+                        />
+                        <Input
+                          value={claudeProviderDraft.customModelsText}
+                          onChange={(event) => setClaudeProviderDraft((current) => ({ ...current, customModelsText: event.target.value }))}
+                          onBlur={() => void commitClaudeProvider()}
+                          onKeyDown={(event) => handleTextInputKeyDown(event, () => void commitClaudeProvider())}
+                          placeholder="Custom models, comma-separated (glm-4-plus, glm-4-flash)"
+                        />
+                        <Input
+                          value={claudeProviderDraft.defaultModel}
+                          onChange={(event) => setClaudeProviderDraft((current) => ({ ...current, defaultModel: event.target.value }))}
+                          onBlur={() => void commitClaudeProvider()}
+                          onKeyDown={(event) => handleTextInputKeyDown(event, () => void commitClaudeProvider())}
+                          placeholder="Default model id"
                         />
                       </div>
                     </SettingsRow>

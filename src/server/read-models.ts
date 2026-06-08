@@ -10,7 +10,7 @@ import type {
 } from "../shared/types"
 import type { ChatRecord, StoreState } from "./events"
 import { resolveLocalPath } from "./paths"
-import { SERVER_PROVIDERS } from "./provider-catalog"
+import { buildServerProviders, getCachedClaudeProviderSnapshot } from "./claude-provider"
 
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
 const SIDEBAR_FALLBACK_PREVIEW_LIMIT = 5
@@ -214,6 +214,6 @@ export function deriveChatSnapshot(
     })),
     messages: transcript.messages,
     history: transcript.history,
-    availableProviders: [...SERVER_PROVIDERS],
+    availableProviders: buildServerProviders(getCachedClaudeProviderSnapshot()),
   }
 }

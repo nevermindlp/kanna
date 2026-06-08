@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test"
+import { beforeEach, describe, expect, test } from "bun:test"
+import { resetClaudeProviderCacheForTests } from "./claude-provider"
 import {
   codexServiceTierFromModelOptions,
   normalizeClaudeModelOptions,
@@ -8,6 +9,10 @@ import {
 import { resolveClaudeApiModelId } from "../shared/types"
 
 describe("provider catalog normalization", () => {
+  beforeEach(() => {
+    resetClaudeProviderCacheForTests()
+  })
+
   test("maps legacy Claude effort into shared model options", () => {
     expect(normalizeClaudeModelOptions("claude-opus-4-7", undefined, "max")).toEqual({
       reasoningEffort: "max",

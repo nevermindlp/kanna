@@ -72,6 +72,14 @@ export function getLlmProviderFilePathDisplay(env: RuntimeEnv = getRuntimeEnv())
   return `${getDataRootDirDisplay(env)}/llm-provider.json`
 }
 
+export function getClaudeProviderFilePath(homeDir: string, env: RuntimeEnv = getRuntimeEnv()) {
+  return `${getDataRootDir(homeDir, env)}/claude-provider.json`
+}
+
+export function getClaudeProviderFilePathDisplay(env: RuntimeEnv = getRuntimeEnv()) {
+  return `${getDataRootDirDisplay(env)}/claude-provider.json`
+}
+
 export function getCliInvocation(arg?: string) {
   return arg ? `${CLI_COMMAND} ${arg}` : CLI_COMMAND
 }
