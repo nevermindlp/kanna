@@ -3,8 +3,17 @@ import { stat } from "node:fs/promises"
 import { APP_NAME, getRuntimeProfile } from "../shared/branding"
 import type { ChatAttachment } from "../shared/types"
 import type { ShareMode } from "../shared/share"
-import { createAuthManager } from "./auth"
-import { EventStore } from "./event-store"
+import { createAuthManager, createDisabledAuthManager, type AuthManager } from "./auth"
+import { createEventStoreRoot, LOCAL_USER_ID } from "./event-store-factory"
+import { resolveKannaRuntimeConfig } from "./kanna-config"
+import { getDb } from "./db/client"
+import { createMySqlUserAuthManager } from "./user-auth"
+import { StoreResolver } from "./store-resolver"
+import { RealtimeHub } from "./realtime-hub"
+import { ObjectStorageService } from "./object-storage"
+import { AttachmentService, inferAttachmentResponseContentType } from "./attachment-service"
+import { UserSettingsService } from "./user-settings-service"
+import type { IUserScopedEventStore } from "./event-store-types"
 import { AgentCoordinator } from "./agent"
 import { KannaAnalyticsReporter } from "./analytics"
 import { AppSettingsManager } from "./app-settings"
@@ -12,7 +21,8 @@ import { DiffStore } from "./diff-store"
 import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
-import { readClaudeProviderSnapshot, validateClaudeProviderCredentials, writeClaudeProviderSnapshot } from "./claude-provider"
+import { buildClaudeSessionEnvFromSnapshot, readClaudeProviderSnapshot, validateClaudeProviderCredentials, writeClaudeProviderSnapshot } from "./claude-provider"
+import { claudeSnapshotFromProviderConfig } from "./user-settings-service"
 import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
@@ -87,13 +97,28 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   const hostname = options.host ?? "127.0.0.1"
   const strictPort = options.strictPort ?? false
   const runtimeProfile = getRuntimeProfile()
-  const auth = options.password ? createAuthManager(options.password, { trustProxy: options.trustProxy ?? false }) : null
-  const store = new EventStore(options.dataDir)
-  const diffStore = new DiffStore(store.dataDir)
+  const config = resolveKannaRuntimeConfig()
+
+  let auth: AuthManager
+  if (config.authMode === "multiuser") {
+    if (!config.databaseUrl) {
+      throw new Error("DATABASE_URL is required when KANNA_AUTH_MODE=multiuser")
+    }
+    auth = createMySqlUserAuthManager(getDb(config.databaseUrl), { trustProxy: options.trustProxy ?? false })
+  } else if (options.password) {
+    auth = createAuthManager(options.password, { trustProxy: options.trustProxy ?? false })
+  } else {
+    auth = createDisabledAuthManager()
+  }
+
+  const eventStoreRoot = await createEventStoreRoot(config, options.dataDir)
+  const storeResolver = new StoreResolver(eventStoreRoot)
+  await storeResolver.migrateLegacyTranscripts(options.onMigrationProgress)
+  const defaultScopedStore = await storeResolver.forUser(LOCAL_USER_ID)
+
+  const diffStore = new DiffStore(storeResolver.dataDir)
   const machineDisplayName = getMachineDisplayName()
-  await store.initialize()
   await diffStore.initialize()
-  await store.migrateLegacyTranscripts(options.onMigrationProgress)
   let discoveredProjects: DiscoveredProject[] = []
 
   async function refreshDiscovery() {
@@ -107,10 +132,18 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
   let router: ReturnType<typeof createWsRouter>
   const terminals = new TerminalManager()
   const keybindings = new KeybindingsManager()
-  const appSettings = new AppSettingsManager(path.join(store.dataDir, "settings.json"))
+  const appSettings = new AppSettingsManager(path.join(storeResolver.dataDir, "settings.json"))
   await appSettings.initialize()
   await keybindings.initialize()
   await readClaudeProviderSnapshot()
+
+  const userSettingsService = config.authMode === "multiuser" && config.databaseUrl
+    ? new UserSettingsService(getDb(config.databaseUrl), config.secretsKey)
+    : null
+  const objectStorage = new ObjectStorageService(config)
+  const attachmentService = new AttachmentService(objectStorage, config.databaseUrl)
+  const realtimeHub = new RealtimeHub(config.redisUrl)
+
   const analytics = new KannaAnalyticsReporter({
     settings: appSettings,
     currentVersion: options.update?.version ?? "unknown",
@@ -126,7 +159,20 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     })
     : null
   const agent = new AgentCoordinator({
-    store,
+    storeResolver,
+    attachmentService,
+    resolveClaudeSessionEnv: userSettingsService
+      ? async (userId) => {
+        const config = await userSettingsService.readProvider<{
+          apiKey?: string
+          baseUrl?: string | null
+          customModels?: string[]
+          defaultModel?: string
+        }>(userId, "claude")
+        const snapshot = claudeSnapshotFromProviderConfig(config, "account settings")
+        return buildClaudeSessionEnvFromSnapshot(snapshot, process.env)
+      }
+      : undefined,
     analytics,
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
       if (chatId) {
@@ -140,14 +186,20 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
       router.scheduleBroadcast()
     },
   })
+  agent.bindUserStore(defaultScopedStore)
+
   router = createWsRouter({
-    store,
+    storeResolver,
     diffStore,
     agent,
     terminals,
     keybindings,
     appSettings,
     analytics,
+    userSettingsService,
+    objectStorage,
+    attachmentService,
+    realtimeHub,
     llmProvider: {
       read: readLlmProviderSnapshot,
       write: writeLlmProviderSnapshot,
@@ -163,9 +215,17 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     machineDisplayName,
     updateManager,
   })
+
+  await realtimeHub.start((userId) => {
+    void router.broadcastSnapshotsForUser(userId)
+  })
   const staleEmptyChatPruneInterval = setInterval(() => {
     void router.pruneStaleEmptyChats()
-      .then(() => router.broadcastSnapshots())
+      .then(() => {
+        if (config.authMode !== "multiuser") {
+          void router.broadcastSnapshots()
+        }
+      })
   }, STALE_EMPTY_CHAT_PRUNE_INTERVAL_MS)
 
   const distDir = path.join(import.meta.dir, "..", "..", "dist", "client")
@@ -182,22 +242,31 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           const url = new URL(req.url)
 
           if (url.pathname === "/auth/status") {
-            return auth
-              ? auth.handleStatus(req)
-              : Response.json({ enabled: false, authenticated: true })
+            return auth.handleStatus(req)
+          }
+
+          if (url.pathname === "/auth/me") {
+            return auth.handleMe?.(req) ?? Response.json({ error: "Not found" }, { status: 404 })
           }
 
           if (url.pathname === "/auth/logout") {
             if (req.method !== "POST") {
               return new Response(null, { status: 405, headers: { Allow: "POST" } })
             }
-
-            return auth
-              ? auth.handleLogout(req)
-              : Response.json({ ok: true })
+            return auth.handleLogout(req)
           }
 
-          if (auth) {
+          if (url.pathname === "/auth/register" && auth.handleRegister) {
+            if (req.method !== "POST") {
+              return new Response(null, { status: 405, headers: { Allow: "POST" } })
+            }
+            return auth.handleRegister(req)
+          }
+
+          const authContext = await auth.resolveAuthContextAsync(req)
+          const requiresAuth = auth.mode === "multiuser" || (auth.mode === "single" && options.password)
+
+          if (requiresAuth) {
             if (url.pathname === "/auth/login") {
               if (req.method === "GET") {
                 return auth.redirectToApp(req)
@@ -212,10 +281,10 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
               if (!auth.validateOrigin(req)) {
                 return new Response("Forbidden", { status: 403 })
               }
-              if (!auth.isAuthenticated(req)) {
+              if (!authContext) {
                 return new Response("Unauthorized", { status: 401 })
               }
-            } else if (url.pathname.startsWith("/api/") && !auth.isAuthenticated(req)) {
+            } else if (url.pathname.startsWith("/api/") && !authContext) {
               return Response.json({ error: "Unauthorized" }, { status: 401 })
             }
           }
@@ -223,6 +292,8 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
           if (url.pathname === "/ws") {
             const upgraded = serverInstance.upgrade(req, {
               data: {
+                userId: authContext?.userId ?? LOCAL_USER_ID,
+                username: authContext?.username ?? "local",
                 subscriptions: new Map(),
                 snapshotSignatures: new Map(),
               },
@@ -234,22 +305,41 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return Response.json({ ok: true, port: actualPort })
           }
 
-          const uploadResponse = await handleProjectUpload(req, url, store)
+          const scopedStore = authContext
+            ? await storeResolver.forUser(authContext.userId)
+            : defaultScopedStore
+
+          const uploadResponse = await handleProjectUpload(req, url, scopedStore, attachmentService, authContext?.userId ?? LOCAL_USER_ID)
           if (uploadResponse) {
             return uploadResponse
           }
 
-          const deleteUploadResponse = await handleProjectUploadDelete(req, url, store)
+          const deleteUploadResponse = await handleProjectUploadDelete(req, url, scopedStore)
           if (deleteUploadResponse) {
             return deleteUploadResponse
           }
 
-          const attachmentContentResponse = await handleAttachmentContent(req, url, store)
+          const attachmentByIdResponse = await handleAttachmentById(req, url, authContext?.userId ?? LOCAL_USER_ID, attachmentService, scopedStore)
+          if (attachmentByIdResponse) {
+            return attachmentByIdResponse
+          }
+
+          const legacyObjectAttachmentResponse = await handleLegacyObjectStorageAttachmentContent(
+            req,
+            url,
+            authContext?.userId ?? LOCAL_USER_ID,
+            objectStorage,
+          )
+          if (legacyObjectAttachmentResponse) {
+            return legacyObjectAttachmentResponse
+          }
+
+          const attachmentContentResponse = await handleAttachmentContent(req, url, scopedStore)
           if (attachmentContentResponse) {
             return attachmentContentResponse
           }
 
-          const projectFileContentResponse = await handleProjectFileContent(req, url, store)
+          const projectFileContentResponse = await handleProjectFileContent(req, url, scopedStore)
           if (projectFileContentResponse) {
             return projectFileContentResponse
           }
@@ -298,20 +388,28 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     appSettings.dispose()
     keybindings.dispose()
     terminals.closeAll()
-    await store.compact()
+    realtimeHub.dispose()
+    await storeResolver.compact(LOCAL_USER_ID)
     server.stop(true)
   }
 
   return {
     port: actualPort,
-    store,
+    store: defaultScopedStore,
+    storeResolver,
     diffStore,
     updateManager,
     stop: shutdown,
   }
 }
 
-async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
+async function handleProjectUpload(
+  req: Request,
+  url: URL,
+  store: IUserScopedEventStore,
+  attachmentService: AttachmentService,
+  userId: string,
+) {
   if (req.method !== "POST") {
     return null
   }
@@ -349,11 +447,18 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
   }
 
   try {
-    const attachments = await persistUploadedFiles({
-      projectId: project.id,
-      localPath: project.localPath,
-      files,
-    })
+    const attachments: ChatAttachment[] = []
+    for (const file of files) {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      attachments.push(await attachmentService.upload({
+        userId,
+        projectId: project.id,
+        localPath: project.localPath,
+        fileName: file.name,
+        bytes,
+        mimeType: file.type || undefined,
+      }))
+    }
     return Response.json({ attachments })
   } catch (error) {
     console.error("[uploads] Upload failed:", error)
@@ -361,7 +466,102 @@ async function handleProjectUpload(req: Request, url: URL, store: EventStore) {
   }
 }
 
-async function handleAttachmentContent(req: Request, url: URL, store: EventStore) {
+async function handleAttachmentById(
+  req: Request,
+  url: URL,
+  userId: string,
+  attachmentService: AttachmentService,
+  store: IUserScopedEventStore,
+) {
+  const match = url.pathname.match(/^\/api\/attachments\/([^/]+)(?:\/content)?$/)
+  if (!match) {
+    return null
+  }
+
+  const attachmentId = decodeURIComponent(match[1])
+  if (!attachmentId) {
+    return Response.json({ error: "Invalid attachment id" }, { status: 400 })
+  }
+
+  if (req.method === "DELETE") {
+    const projectId = url.searchParams.get("projectId")
+    const project = projectId ? store.getProject(projectId) : null
+    const deleted = await attachmentService.deleteAttachment({
+      attachmentId,
+      userId,
+      localPath: project?.localPath,
+    })
+    return Response.json({ ok: deleted })
+  }
+
+  if (req.method !== "GET") {
+    return new Response(null, {
+      status: 405,
+      headers: {
+        Allow: "GET, DELETE",
+      },
+    })
+  }
+
+  if (!url.pathname.endsWith("/content")) {
+    return Response.json({ error: "Attachment not found" }, { status: 404 })
+  }
+
+  try {
+    const stored = await attachmentService.readContent({ attachmentId, userId })
+    return new Response(stored.bytes, {
+      headers: {
+        "Content-Type": inferAttachmentResponseContentType(stored.fileName, stored.mimeType),
+      },
+    })
+  } catch {
+    return Response.json({ error: "Attachment not found" }, { status: 404 })
+  }
+}
+
+async function handleLegacyObjectStorageAttachmentContent(
+  req: Request,
+  url: URL,
+  userId: string,
+  objectStorage: ObjectStorageService,
+) {
+  const prefix = "/api/attachments/"
+  if (!url.pathname.startsWith(prefix) || url.pathname.endsWith("/content")) {
+    return null
+  }
+
+  if (req.method !== "GET") {
+    return new Response(null, {
+      status: 405,
+      headers: {
+        Allow: "GET",
+      },
+    })
+  }
+
+  if (!objectStorage.enabled) {
+    return Response.json({ error: "Attachment not found" }, { status: 404 })
+  }
+
+  const objectKey = decodeURIComponent(url.pathname.slice(prefix.length))
+  if (!objectKey || !objectStorage.isOwnedObjectKey(objectKey, userId)) {
+    return Response.json({ error: "Attachment not found" }, { status: 404 })
+  }
+
+  try {
+    const stored = await objectStorage.getAttachment(objectKey)
+    const fileName = stored.fileName.replace(/^[\da-f-]{36}-/i, "")
+    return new Response(stored.bytes, {
+      headers: {
+        "Content-Type": inferAttachmentContentType(fileName, stored.mimeType ?? undefined),
+      },
+    })
+  } catch {
+    return Response.json({ error: "Attachment not found" }, { status: 404 })
+  }
+}
+
+async function handleAttachmentContent(req: Request, url: URL, store: IUserScopedEventStore) {
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/uploads\/([^/]+)\/content$/)
   if (!match) {
     return null
@@ -404,7 +604,7 @@ async function handleAttachmentContent(req: Request, url: URL, store: EventStore
   })
 }
 
-async function handleProjectFileContent(req: Request, url: URL, store: EventStore) {
+async function handleProjectFileContent(req: Request, url: URL, store: IUserScopedEventStore) {
   const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/files\/([^/]+)\/content$/)
   if (!match) {
     return null
@@ -452,7 +652,7 @@ async function handleProjectFileContent(req: Request, url: URL, store: EventStor
   })
 }
 
-async function handleProjectUploadDelete(req: Request, url: URL, store: EventStore) {
+async function handleProjectUploadDelete(req: Request, url: URL, store: IUserScopedEventStore) {
   if (req.method !== "DELETE") {
     return null
   }

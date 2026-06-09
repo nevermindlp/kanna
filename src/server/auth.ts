@@ -1,84 +1,14 @@
 import { randomBytes, timingSafeEqual } from "node:crypto"
+import {
+  buildCookie,
+  effectiveOrigin,
+  getSessionTokenFromRequest,
+  sanitizeNextPath,
+  SESSION_COOKIE_NAME,
+} from "./auth-shared"
+import type { AuthContext, AuthManager, AuthManagerOptions, AuthStatusPayload } from "./user-auth"
 
-const SESSION_COOKIE_NAME = "kanna_session"
-
-export interface AuthStatusPayload {
-  enabled: boolean
-  authenticated: boolean
-}
-
-export interface AuthManager {
-  isAuthenticated(req: Request): boolean
-  validateOrigin(req: Request): boolean
-  redirectToApp(req: Request): Response
-  handleLogin(req: Request, nextPath: string): Promise<Response>
-  handleLogout(req: Request): Response
-  handleStatus(req: Request): Response
-}
-
-function parseCookies(header: string | null) {
-  const cookies = new Map<string, string>()
-  if (!header) return cookies
-
-  for (const segment of header.split(";")) {
-    const trimmed = segment.trim()
-    if (!trimmed) continue
-    const separator = trimmed.indexOf("=")
-    if (separator <= 0) continue
-    const key = trimmed.slice(0, separator).trim()
-    const value = trimmed.slice(separator + 1).trim()
-    cookies.set(key, decodeURIComponent(value))
-  }
-
-  return cookies
-}
-
-function sanitizeNextPath(nextPath: string | null | undefined) {
-  if (!nextPath || typeof nextPath !== "string") return "/"
-  if (!nextPath.startsWith("/")) return "/"
-  if (nextPath.startsWith("//")) return "/"
-  if (nextPath.startsWith("/auth/login")) return "/"
-  return nextPath
-}
-
-function forwardedProto(req: Request): "http" | "https" | null {
-  const xfp = req.headers.get("x-forwarded-proto")
-  if (!xfp) return null
-  const value = xfp.split(",")[0]?.trim().toLowerCase()
-  return value === "http" || value === "https" ? value : null
-}
-
-function effectiveOrigin(req: Request, trustProxy: boolean): string {
-  const url = new URL(req.url)
-  if (!trustProxy) return url.origin
-  const proto = forwardedProto(req)
-  const scheme = proto ?? url.protocol.replace(":", "")
-  return `${scheme}://${url.host}`
-}
-
-function shouldUseSecureCookie(req: Request, trustProxy: boolean) {
-  if (trustProxy) {
-    const proto = forwardedProto(req)
-    if (proto) return proto === "https"
-  }
-  return new URL(req.url).protocol === "https:"
-}
-
-function buildCookie(name: string, value: string, req: Request, trustProxy: boolean, extras: string[] = []) {
-  const parts = [
-    `${name}=${encodeURIComponent(value)}`,
-    "Path=/",
-    "HttpOnly",
-    "SameSite=Strict",
-  ]
-
-  if (shouldUseSecureCookie(req, trustProxy)) {
-    parts.push("Secure")
-  }
-
-  parts.push(...extras)
-  return parts.join("; ")
-}
+export type { AuthContext, AuthManager, AuthManagerOptions, AuthStatusPayload }
 
 async function readLoginForm(req: Request) {
   const contentType = req.headers.get("content-type") ?? ""
@@ -98,32 +28,10 @@ async function readLoginForm(req: Request) {
   }
 }
 
-export interface AuthManagerOptions {
-  /**
-   * When true, the auth layer trusts X-Forwarded-Proto to decide whether the
-   * public origin is http or https. The hostname always comes from the Host
-   * header (never X-Forwarded-Host) because X-Forwarded-Host is passed
-   * through by some tunnels unmodified and would otherwise allow open
-   * redirects.
-   * Enable only when the server is reachable solely through a trusted reverse
-   * proxy such as cloudflared.
-   */
-  trustProxy?: boolean
-}
-
 export function createAuthManager(password: string, options: AuthManagerOptions = {}): AuthManager {
-  const sessions = new Set<string>()
+  const sessions = new Map<string, { createdAt: number }>()
   const expectedPassword = Buffer.from(password)
   const trustProxy = options.trustProxy ?? false
-
-  function getSessionToken(req: Request) {
-    return parseCookies(req.headers.get("cookie")).get(SESSION_COOKIE_NAME) ?? null
-  }
-
-  function isAuthenticated(req: Request) {
-    const sessionToken = getSessionToken(req)
-    return Boolean(sessionToken && sessions.has(sessionToken))
-  }
 
   function validateOrigin(req: Request) {
     const origin = req.headers.get("origin")
@@ -135,12 +43,12 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
 
   function createSessionCookie(req: Request) {
     const sessionToken = randomBytes(32).toString("base64url")
-    sessions.add(sessionToken)
+    sessions.set(sessionToken, { createdAt: Date.now() })
     return buildCookie(SESSION_COOKIE_NAME, sessionToken, req, trustProxy)
   }
 
   function clearSessionCookie(req: Request) {
-    const sessionToken = getSessionToken(req)
+    const sessionToken = getSessionTokenFromRequest(req)
     if (sessionToken) {
       sessions.delete(sessionToken)
     }
@@ -155,10 +63,32 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
     return timingSafeEqual(actual, expectedPassword)
   }
 
-  function handleStatus(req: Request) {
+  function resolveAuthContext(req: Request): AuthContext | null {
+    const sessionToken = getSessionTokenFromRequest(req)
+    if (!sessionToken || !sessions.has(sessionToken)) {
+      return null
+    }
+    return {
+      userId: "__shared__",
+      username: "shared",
+      sessionId: sessionToken,
+    }
+  }
+
+  function isAuthenticated(req: Request) {
+    return Boolean(resolveAuthContext(req))
+  }
+
+  async function resolveAuthContextAsync(req: Request) {
+    return resolveAuthContext(req)
+  }
+
+  async function handleStatus(req: Request) {
+    const context = resolveAuthContext(req)
     return Response.json({
       enabled: true,
-      authenticated: isAuthenticated(req),
+      authenticated: Boolean(context),
+      mode: "single",
     } satisfies AuthStatusPayload)
   }
 
@@ -178,12 +108,11 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
     }
 
     const response = Response.json({ ok: true, nextPath: sanitizeNextPath(nextPath || fallbackNextPath) })
-
     response.headers.set("Set-Cookie", createSessionCookie(req))
     return response
   }
 
-  function handleLogout(req: Request) {
+  async function handleLogout(req: Request) {
     if (!validateOrigin(req)) {
       return Response.json({ error: "Forbidden" }, { status: 403 })
     }
@@ -194,11 +123,44 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
   }
 
   return {
+    mode: "single",
     isAuthenticated,
+    resolveAuthContext,
     validateOrigin,
     redirectToApp,
     handleLogin,
     handleLogout,
     handleStatus,
+    resolveAuthContextAsync,
   }
+}
+
+export function createDisabledAuthManager(): AuthManager {
+  return {
+    mode: "single",
+    isAuthenticated: () => true,
+    resolveAuthContext: () => ({
+      userId: "__local__",
+      username: "local",
+      sessionId: "local",
+    }),
+    validateOrigin: () => true,
+    redirectToApp: (req) => Response.redirect(new URL("/", req.url), 302),
+    handleLogin: async () => Response.json({ ok: true }),
+    handleLogout: async () => Response.json({ ok: true }),
+    handleStatus: async () => Response.json({
+      enabled: false,
+      authenticated: true,
+      mode: "single",
+    } satisfies AuthStatusPayload),
+    resolveAuthContextAsync: async () => ({
+      userId: "__local__",
+      username: "local",
+      sessionId: "local",
+    }),
+  }
+}
+
+export type PasswordAuthManager = AuthManager & {
+  resolveAuthContextAsync: (req: Request) => Promise<AuthContext | null>
 }

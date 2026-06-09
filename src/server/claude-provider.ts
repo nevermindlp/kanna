@@ -170,8 +170,10 @@ export async function writeClaudeProviderSnapshot(
   return snapshot
 }
 
-export function buildClaudeSessionEnv(baseEnv: Record<string, string | undefined> = process.env) {
-  const snapshot = cachedSnapshot
+export function buildClaudeSessionEnvFromSnapshot(
+  snapshot: ClaudeProviderSnapshot | null,
+  baseEnv: Record<string, string | undefined> = process.env,
+) {
   const env = { ...baseEnv }
   delete env.CLAUDECODE
 
@@ -184,6 +186,10 @@ export function buildClaudeSessionEnv(baseEnv: Record<string, string | undefined
   }
 
   return env
+}
+
+export function buildClaudeSessionEnv(baseEnv: Record<string, string | undefined> = process.env) {
+  return buildClaudeSessionEnvFromSnapshot(cachedSnapshot, baseEnv)
 }
 
 export function buildServerProviders(claudeProvider: ClaudeProviderSnapshot | null = cachedSnapshot): ProviderCatalogEntry[] {

@@ -13,7 +13,8 @@ import type {
 } from "../shared/types"
 import { normalizeToolCall } from "../shared/tools"
 import type { ClientCommand } from "../shared/protocol"
-import { EventStore } from "./event-store"
+import type { IUserScopedEventStore } from "./event-store-types"
+import type { StoreResolver } from "./store-resolver"
 import type { AnalyticsReporter } from "./analytics"
 import { NoopAnalyticsReporter } from "./analytics"
 import { CodexAppServerManager } from "./codex-app-server"
@@ -29,6 +30,7 @@ import {
 import { resolveClaudeApiModelId } from "../shared/types"
 import { buildClaudeSessionEnv, isCustomClaudeModel } from "./claude-provider"
 import { fallbackTitleFromMessage } from "./generate-title"
+import type { AttachmentService } from "./attachment-service"
 
 const CLAUDE_TOOLSET = [
   "Skill",
@@ -100,7 +102,9 @@ interface ClaudeSessionState {
 }
 
 interface AgentCoordinatorArgs {
-  store: EventStore
+  storeResolver?: StoreResolver
+  /** @deprecated test helper — binds store directly */
+  store?: IUserScopedEventStore
   onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   analytics?: AnalyticsReporter
   codexManager?: CodexAppServerManager
@@ -113,7 +117,10 @@ interface AgentCoordinatorArgs {
     sessionToken: string | null
     forkSession: boolean
     onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
+    sessionEnv?: Record<string, string | undefined>
   }) => Promise<ClaudeSessionHandle>
+  resolveClaudeSessionEnv?: (userId: string) => Promise<Record<string, string | undefined>>
+  attachmentService?: AttachmentService | null
 }
 
 interface SendToStartingProfile {
@@ -560,6 +567,7 @@ async function startClaudeSession(args: {
   sessionToken: string | null
   forkSession: boolean
   onToolRequest: (request: HarnessToolRequest) => Promise<unknown>
+  sessionEnv?: Record<string, string | undefined>
 }): Promise<ClaudeSessionHandle> {
   const canUseTool: CanUseTool = async (toolName, input, options) => {
     if (toolName !== "AskUserQuestion" && toolName !== "ExitPlanMode") {
@@ -631,7 +639,7 @@ async function startClaudeSession(args: {
       tools: [...CLAUDE_TOOLSET],
       settingSources: ["user", "project", "local"],
       pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE?.replace(/^~(?=\/|$)/, homedir()) || undefined,
-      env: buildClaudeSessionEnv(process.env),
+      env: args.sessionEnv ?? buildClaudeSessionEnv(process.env),
     },
   })
 
@@ -673,24 +681,46 @@ async function startClaudeSession(args: {
 }
 
 export class AgentCoordinator {
-  private readonly store: EventStore
+  private readonly chatUserIds = new Map<string, string>()
+  private boundStore!: IUserScopedEventStore
   private readonly onStateChange: (chatId?: string, options?: { immediate?: boolean }) => void
   private readonly analytics: AnalyticsReporter
   private readonly codexManager: CodexAppServerManager
   private readonly generateTitle: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   private readonly startClaudeSessionFn: NonNullable<AgentCoordinatorArgs["startClaudeSession"]>
+  private readonly resolveClaudeSessionEnv?: AgentCoordinatorArgs["resolveClaudeSessionEnv"]
+  private readonly attachmentService?: AttachmentService | null
   private reportBackgroundError: ((message: string) => void) | null = null
   readonly activeTurns = new Map<string, ActiveTurn>()
   readonly drainingStreams = new Map<string, { turn: HarnessTurn }>()
   readonly claudeSessions = new Map<string, ClaudeSessionState>()
 
   constructor(args: AgentCoordinatorArgs) {
-    this.store = args.store
+    if (args.store) {
+      this.boundStore = args.store
+    }
     this.onStateChange = args.onStateChange
     this.analytics = args.analytics ?? NoopAnalyticsReporter
     this.codexManager = args.codexManager ?? new CodexAppServerManager()
     this.generateTitle = args.generateTitle ?? generateTitleForChatDetailed
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
+    this.resolveClaudeSessionEnv = args.resolveClaudeSessionEnv
+    this.attachmentService = args.attachmentService ?? null
+  }
+
+  bindUserStore(store: IUserScopedEventStore) {
+    this.boundStore = store
+  }
+
+  rememberChatUser(chatId: string, userId: string) {
+    this.chatUserIds.set(chatId, userId)
+  }
+
+  private get store() {
+    if (!this.boundStore) {
+      throw new Error("Event store accessed before user context was bound")
+    }
+    return this.boundStore
   }
 
   setBackgroundErrorReporter(report: ((message: string) => void) | null) {
@@ -901,6 +931,17 @@ export class AgentCoordinator {
       void this.generateTitleInBackground(args.chatId, args.content, project.localPath, optimisticTitle ?? "New Chat")
     }
 
+    const userId = this.chatUserIds.get(args.chatId) ?? this.store.userId
+    const resolvedAttachments = this.attachmentService
+      ? await this.attachmentService.materializeForAgent({
+        attachments: args.attachments,
+        projectId: project.id,
+        localPath: project.localPath,
+        userId,
+      })
+      : args.attachments
+    const promptText = buildPromptText(args.content, resolvedAttachments)
+
     const onToolRequest = async (request: HarnessToolRequest): Promise<unknown> => {
       const active = this.activeTurns.get(args.chatId)
       if (!active) {
@@ -965,7 +1006,7 @@ export class AgentCoordinator {
       })
       turn = await this.codexManager.startTurn({
         chatId: args.chatId,
-        content: buildPromptText(args.content, args.attachments),
+        content: promptText,
         model: args.model,
         effort: args.effort as any,
         serviceTier: args.serviceTier,
@@ -1043,7 +1084,7 @@ export class AgentCoordinator {
         contentPreview: args.content.slice(0, 160),
         pendingPromptSeqs: [...session.pendingPromptSeqs],
       })
-      await session.session.sendPrompt(buildPromptText(args.content, args.attachments))
+      await session.session.sendPrompt(promptText)
       logSendToStartingProfile(args.profile, "start_turn.claude_prompt_sent", {
         chatId: args.chatId,
       })
@@ -1071,6 +1112,11 @@ export class AgentCoordinator {
         this.claudeSessions.delete(args.chatId)
       }
 
+      let sessionEnv: Record<string, string | undefined> | undefined
+      if (this.resolveClaudeSessionEnv) {
+        sessionEnv = await this.resolveClaudeSessionEnv(this.chatUserIds.get(args.chatId) ?? this.store.userId)
+      }
+
       const started = await this.startClaudeSessionFn({
         localPath: args.localPath,
         model: args.model,
@@ -1079,6 +1125,7 @@ export class AgentCoordinator {
         sessionToken: args.sessionToken,
         forkSession: args.forkSession,
         onToolRequest: args.onToolRequest,
+        sessionEnv,
       })
 
       session = {

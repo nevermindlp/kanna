@@ -64,6 +64,8 @@ export interface InstalledSkillsSnapshot {
   skills: InstalledSkillSummary[]
 }
 
+export type AttachmentStorageBackend = "local" | "object_storage"
+
 export interface ChatAttachment {
   id: string
   kind: AttachmentKind
@@ -73,6 +75,11 @@ export interface ChatAttachment {
   contentUrl: string
   mimeType: string
   size: number
+  /** Stable attachment record id (= attachment_objects.id when using object storage) */
+  storageId?: string
+  /** S3 object key when storageBackend is object_storage */
+  objectKey?: string
+  storageBackend?: AttachmentStorageBackend
 }
 
 export interface StandaloneTranscriptBundle {

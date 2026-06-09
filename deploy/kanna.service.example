@@ -1,0 +1,19 @@
+[Unit]
+Description=Kanna web UI for Claude Code and Codex
+Documentation=file:///opt/kanna/docs/production-deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=kanna
+Group=kanna
+WorkingDirectory=/opt/kanna
+EnvironmentFile=/etc/kanna/env
+ExecStart=/usr/local/bin/bun run /opt/kanna/src/server/cli.ts --host 127.0.0.1 --port 3210 --no-open --strict-port
+Restart=on-failure
+RestartSec=5
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

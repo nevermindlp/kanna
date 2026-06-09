@@ -25,6 +25,8 @@ const AUTH_STATUS_RETRY_DELAY_MS = 500
 interface AuthStatusResponse {
   enabled: boolean
   authenticated: boolean
+  mode?: "single" | "multiuser"
+  username?: string
 }
 
 type AppAuthState =
@@ -44,22 +46,33 @@ export function shouldRetryAuthStatusRequest(responseOk: boolean | null) {
   return responseOk !== true
 }
 
-function PasswordScreen({
+function LoginScreen({
+  mode,
   error,
-  onSubmit,
+  onLogin,
+  onRegister,
 }: {
+  mode: "single" | "multiuser"
   error: string | null
-  onSubmit: (password: string) => Promise<void>
+  onLogin: (username: string, password: string) => Promise<void>
+  onRegister?: (username: string, password: string) => Promise<void>
 }) {
+  const [username, setUsername] = useState("")
   const [password, setPassword] = useState("")
   const [submitting, setSubmitting] = useState(false)
+  const [isRegister, setIsRegister] = useState(false)
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault()
     if (!password || submitting) return
+    if (mode === "multiuser" && !username.trim()) return
     setSubmitting(true)
     try {
-      await onSubmit(password)
+      if (isRegister && onRegister) {
+        await onRegister(username.trim(), password)
+      } else {
+        await onLogin(mode === "multiuser" ? username.trim() : "", password)
+      }
       setPassword("")
     } finally {
       setSubmitting(false)
@@ -77,7 +90,9 @@ function PasswordScreen({
             </div>
           </div>
           <CardDescription className="leading-6">
-            Enter your password to continue.
+            {mode === "multiuser"
+              ? (isRegister ? "Create an account to continue." : "Sign in to continue.")
+              : "Enter your password to continue."}
           </CardDescription>
         </CardHeader>
         <CardContent className="px-6 pb-6">
@@ -87,10 +102,22 @@ function PasswordScreen({
                 {error}
               </div>
             ) : null}
+            {mode === "multiuser" ? (
+              <Input
+                id="kanna-username"
+                type="text"
+                autoComplete="username"
+                value={username}
+                onChange={(event) => setUsername(event.target.value)}
+                placeholder="Username"
+                disabled={submitting}
+                className="h-11 rounded-2xl bg-background"
+              />
+            ) : null}
             <Input
               id="kanna-password"
               type="password"
-              autoComplete="current-password"
+              autoComplete={isRegister ? "new-password" : "current-password"}
               value={password}
               onChange={(event) => setPassword(event.target.value)}
               placeholder="Password"
@@ -99,11 +126,22 @@ function PasswordScreen({
             />
             <Button
               type="submit"
-              disabled={submitting || password.length === 0}
+              disabled={submitting || password.length === 0 || (mode === "multiuser" && username.trim().length === 0)}
               className="h-11 w-full"
             >
-              {submitting ? "Unlocking..." : "Unlock"}
+              {submitting ? "Working..." : isRegister ? "Create account" : mode === "multiuser" ? "Sign in" : "Unlock"}
             </Button>
+            {mode === "multiuser" && onRegister ? (
+              <Button
+                type="button"
+                variant="ghost"
+                className="h-10 w-full"
+                disabled={submitting}
+                onClick={() => setIsRegister((current) => !current)}
+              >
+                {isRegister ? "Already have an account? Sign in" : "Need an account? Register"}
+              </Button>
+            ) : null}
           </form>
         </CardContent>
       </Card>
@@ -111,8 +149,25 @@ function PasswordScreen({
   )
 }
 
+function PasswordScreen({
+  error,
+  onSubmit,
+}: {
+  error: string | null
+  onSubmit: (password: string) => Promise<void>
+}) {
+  return (
+    <LoginScreen
+      mode="single"
+      error={error}
+      onLogin={async (_username, password) => onSubmit(password)}
+    />
+  )
+}
+
 function useAppAuthState() {
   const [state, setState] = useState<AppAuthState>({ status: "checking" })
+  const [authMode, setAuthMode] = useState<"single" | "multiuser">("single")
   const retryTimeoutRef = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
@@ -147,6 +202,7 @@ function useAppAuthState() {
     }
 
     const payload = await response.json() as Partial<AuthStatusResponse>
+    setAuthMode(payload.mode === "multiuser" ? "multiuser" : "single")
     setState(getAppAuthStateFromStatus(payload))
   }, [])
 
@@ -159,27 +215,57 @@ function useAppAuthState() {
     }
   }, [refresh])
 
-  const submitPassword = useCallback(async (password: string) => {
+  const submitLogin = useCallback(async (username: string, password: string) => {
     const response = await fetch("/auth/login", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         Accept: "application/json",
       },
-      body: JSON.stringify({ password, next: window.location.pathname + window.location.search }),
+      body: JSON.stringify({
+        username: username || undefined,
+        password,
+        next: window.location.pathname + window.location.search,
+      }),
     })
 
     if (!response.ok) {
-      setState({ status: "locked", error: "Incorrect password. Try again." })
+      setState({ status: "locked", error: authMode === "multiuser" ? "Invalid username or password." : "Incorrect password. Try again." })
+      return
+    }
+
+    await refresh()
+  }, [authMode, refresh])
+
+  const submitRegister = useCallback(async (username: string, password: string) => {
+    const response = await fetch("/auth/register", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Accept: "application/json",
+      },
+      body: JSON.stringify({ username, password }),
+    })
+
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null
+      setState({ status: "locked", error: payload?.error ?? "Registration failed." })
       return
     }
 
     await refresh()
   }, [refresh])
 
+  const submitPassword = useCallback(async (password: string) => {
+    await submitLogin("", password)
+  }, [submitLogin])
+
   return {
     state,
+    authMode,
     submitPassword,
+    submitLogin,
+    submitRegister,
   }
 }
 
@@ -386,6 +472,16 @@ export function App() {
   }
 
   if (auth.state.status === "locked") {
+    if (auth.authMode === "multiuser") {
+      return (
+        <LoginScreen
+          mode="multiuser"
+          error={auth.state.error}
+          onLogin={auth.submitLogin}
+          onRegister={auth.submitRegister}
+        />
+      )
+    }
     return <PasswordScreen error={auth.state.error} onSubmit={auth.submitPassword} />
   }
 

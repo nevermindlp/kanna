@@ -819,6 +819,7 @@ export function SettingsPage() {
   const [changelogStatus, setChangelogStatus] = useState<ChangelogStatus>("idle")
   const [signingOut, setSigningOut] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(false)
+  const [authUsername, setAuthUsername] = useState<string | null>(null)
   const [releases, setReleases] = useState<GithubRelease[]>([])
   const [changelogError, setChangelogError] = useState<string | null>(null)
   const selectedPage = resolveSettingsSectionId(sectionId) ?? "general"
@@ -960,11 +961,12 @@ export function SettingsPage() {
     })
       .then(async (response) => {
         if (!response.ok) return { enabled: false }
-        return await response.json() as { enabled?: boolean }
+        return await response.json() as { enabled?: boolean; username?: string; mode?: string }
       })
       .then((payload) => {
         if (cancelled) return
         setAuthEnabled(payload.enabled === true)
+        setAuthUsername(typeof payload.username === "string" ? payload.username : null)
       })
       .catch(() => {
         if (cancelled) return
@@ -1328,7 +1330,13 @@ export function SettingsPage() {
               </button>
             ))}
             {authEnabled ? (
-              <button
+              <>
+                {authUsername ? (
+                  <div className="px-3 py-2 text-xs text-muted-foreground">
+                    Signed in as <span className="font-medium text-foreground">{authUsername}</span>
+                  </div>
+                ) : null}
+                <button
                 type="button"
                 onClick={() => {
                   void handleSidebarSignOut()
@@ -1341,6 +1349,7 @@ export function SettingsPage() {
                   <span>{signingOut ? "Signing out..." : "Sign out"}</span>
                 </div>
               </button>
+              </>
             ) : null}
           </div>
         </aside>

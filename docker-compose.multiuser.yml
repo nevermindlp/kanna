@@ -1,0 +1,41 @@
+services:
+  mysql:
+    image: mysql:8.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: kanna_root
+      MYSQL_DATABASE: kanna
+      MYSQL_USER: kanna
+      MYSQL_PASSWORD: kanna_secret
+    ports:
+      - "3306:3306"
+    volumes:
+      - kanna_mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-ukanna", "-pkanna_secret"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+
+  minio:
+    image: minio/minio:latest
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: kanna
+      MINIO_ROOT_PASSWORD: kanna_secret
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - kanna_minio_data:/data
+
+volumes:
+  kanna_mysql_data:
+  kanna_minio_data:

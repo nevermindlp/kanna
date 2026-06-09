@@ -11,7 +11,13 @@ import { NoopAnalyticsReporter } from "./analytics"
 import type { AppSettingsManager } from "./app-settings"
 import type { DiscoveredProject } from "./discovery"
 import { DiffStore } from "./diff-store"
-import { EventStore } from "./event-store"
+import type { IUserScopedEventStore } from "./event-store-types"
+import { getActiveEventStore, tryGetActiveEventStore, tryGetActiveUserId, withUserEventStore } from "./event-store-context"
+import { LOCAL_USER_ID } from "./kanna-config"
+import { createUserScopedSettingsAdapters } from "./user-settings-adapters"
+import {
+  UserSettingsService,
+} from "./user-settings-service"
 import { openExternal } from "./external-open"
 import { KeybindingsManager } from "./keybindings"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
@@ -20,6 +26,9 @@ import { readProjectQuickActions, writeProjectQuickActions } from "./project-qui
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
 import type { UpdateManager } from "./update-manager"
+import type { StoreResolver } from "./store-resolver"
+import type { RealtimeHub } from "./realtime-hub"
+import type { ObjectStorageService } from "./object-storage"
 import { deriveChatSnapshot, deriveLocalProjectsSnapshot, deriveSidebarData } from "./read-models"
 import type {
   AppSettingsPatch,
@@ -112,19 +121,26 @@ function countSubscriptionsByTopic(ws: ServerWebSocket<ClientState>) {
 }
 
 export interface ClientState {
+  userId: string
+  username: string
   subscriptions: Map<string, SubscriptionTopic>
   snapshotSignatures: Map<string, string>
   protectedDraftChatIds?: Set<string>
 }
 
 interface CreateWsRouterArgs {
-  store: EventStore
+  storeResolver?: StoreResolver
+  /** @deprecated test helper */
+  store?: IUserScopedEventStore
   diffStore?: Pick<DiffStore, "getProjectSnapshot" | "refreshSnapshot" | "initializeGit" | "getGitHubPublishInfo" | "checkGitHubRepoAvailability" | "publishToGitHub" | "listBranches" | "previewMergeBranch" | "mergeBranch" | "syncBranch" | "checkoutBranch" | "createBranch" | "generateCommitMessage" | "commitFiles" | "discardFile" | "ignoreFile" | "readPatch">
   agent: AgentCoordinator
   terminals: TerminalManager
   keybindings: KeybindingsManager
   appSettings?: Pick<AppSettingsManager, "getSnapshot" | "write"> & Partial<Pick<AppSettingsManager, "writePatch" | "onChange">>
   analytics?: AnalyticsReporter
+  userSettingsService?: UserSettingsService | null
+  objectStorage?: ObjectStorageService
+  realtimeHub?: RealtimeHub
   llmProvider?: {
     read: () => Promise<LlmProviderSnapshot>
     write: (value: Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) => Promise<LlmProviderSnapshot>
@@ -153,13 +169,13 @@ interface SnapshotBroadcastFilter {
 }
 
 interface SnapshotComputationCache {
-  sidebar?: {
+  sidebarByUserId?: Map<string, {
     data: ReturnType<typeof deriveSidebarData>
     signature: string
-  }
+  }>
 }
 
-function getSidebarProjectOrder(store: EventStore) {
+function getSidebarProjectOrder(store: IUserScopedEventStore) {
   return typeof store.getSidebarProjectOrder === "function"
     ? store.getSidebarProjectOrder()
     : []
@@ -381,13 +397,17 @@ function ensureSnapshotSignatures(ws: ServerWebSocket<ClientState>) {
 }
 
 export function createWsRouter({
-  store,
+  storeResolver: storeResolverArg,
+  store: legacyStore,
   diffStore,
   agent,
   terminals,
   keybindings,
   appSettings,
   analytics,
+  userSettingsService,
+  objectStorage,
+  realtimeHub,
   llmProvider,
   claudeProvider,
   refreshDiscovery,
@@ -395,6 +415,25 @@ export function createWsRouter({
   machineDisplayName,
   updateManager,
 }: CreateWsRouterArgs) {
+  const storeResolver = storeResolverArg ?? {
+    dataDir: "",
+    isMultiTenant: false,
+    initialize: async () => {},
+    scope: () => legacyStore!,
+    forUser: async () => legacyStore!,
+    migrateLegacyTranscripts: async () => false,
+    compact: async () => {},
+  } as unknown as StoreResolver
+  const store = new Proxy({} as IUserScopedEventStore, {
+    get(_target, prop, receiver) {
+      const active = getActiveEventStore() as unknown as Record<PropertyKey, unknown>
+      const value = active[prop as keyof IUserScopedEventStore]
+      if (typeof value === "function") {
+        return value.bind(active)
+      }
+      return Reflect.get(active, prop, receiver)
+    },
+  })
   const sockets = new Set<ServerWebSocket<ClientState>>()
   let pendingBroadcastTimer: ReturnType<typeof setTimeout> | null = null
   let pendingBroadcastAll = false
@@ -575,6 +614,19 @@ export function createWsRouter({
   }
   const resolvedAnalytics = analytics ?? NoopAnalyticsReporter
 
+  function buildSettingsAdapters(userId: string) {
+    return createUserScopedSettingsAdapters({
+      userId,
+      isMultiTenant: storeResolver.isMultiTenant,
+      userSettingsService: userSettingsService ?? null,
+      keybindings,
+      appSettings,
+      fallbackAppSettings: fallbackAppSettingsSnapshot,
+      fileClaudeProvider: resolvedClaudeProvider,
+      fileLlmProvider: resolvedLlmProvider,
+    })
+  }
+
   function getProtectedChatIds() {
     const activeStatuses = agent.getActiveStatuses()
     const drainingChatIds = typeof agent.getDrainingChatIds === "function"
@@ -604,13 +656,17 @@ export function createWsRouter({
     return protectedChatIds
   }
 
+  async function resolveActiveStore(userId = tryGetActiveUserId() ?? LOCAL_USER_ID) {
+    return tryGetActiveEventStore() ?? await storeResolver.forUser(userId)
+  }
+
   async function maybePruneStaleEmptyChats(extraSockets?: Iterable<ServerWebSocket<ClientState>>) {
     const startedAt = performance.now()
     const activeChatIds = getProtectedChatIds()
     const protectedDraftChatIds = getProtectedDraftChatIds(extraSockets)
-    const prunedChatIds = await store.pruneStaleEmptyChats?.({
-      activeChatIds,
-      protectedChatIds: protectedDraftChatIds,
+    const activeStore = await resolveActiveStore()
+    const prunedChatIds = await activeStore.pruneStaleEmptyChats?.({
+      protectedChatIds: new Set([...activeChatIds, ...protectedDraftChatIds]),
     })
     if (isSendToStartingProfilingEnabled()) {
       console.log("[kanna/send->starting][server]", JSON.stringify({
@@ -619,8 +675,8 @@ export function createWsRouter({
         activeChatCount: activeChatIds.size,
         protectedDraftChatCount: protectedDraftChatIds.size,
         prunedCount: prunedChatIds?.length ?? 0,
-        totalChatCount: store.state.chatsById.size,
-        totalProjectCount: store.state.projectsById.size,
+        totalChatCount: activeStore.state.chatsById.size,
+        totalProjectCount: activeStore.state.projectsById.size,
       }))
     }
   }
@@ -659,8 +715,10 @@ export function createWsRouter({
   }
 
   function getSidebarSnapshotCacheEntry(cache?: SnapshotComputationCache) {
-    if (cache?.sidebar) {
-      return cache.sidebar
+    const userId = getActiveEventStore().userId
+    const cached = cache?.sidebarByUserId?.get(userId)
+    if (cached) {
+      return cached
     }
 
     const startedAt = performance.now()
@@ -689,13 +747,16 @@ export function createWsRouter({
     }
 
     if (cache) {
-      cache.sidebar = sidebar
+      if (!cache.sidebarByUserId) {
+        cache.sidebarByUserId = new Map()
+      }
+      cache.sidebarByUserId.set(userId, sidebar)
     }
 
     return sidebar
   }
 
-  function createEnvelope(id: string, topic: SubscriptionTopic, cache?: SnapshotComputationCache): ServerEnvelope {
+  async function createEnvelope(id: string, topic: SubscriptionTopic, cache?: SnapshotComputationCache): Promise<ServerEnvelope> {
     if (topic.type === "sidebar") {
       const sidebar = getSidebarSnapshotCacheEntry(cache)
       return {
@@ -725,25 +786,29 @@ export function createWsRouter({
     }
 
     if (topic.type === "keybindings") {
+      const settings = buildSettingsAdapters(store.userId)
+      const data = await Promise.resolve(settings.keybindings.getSnapshot())
       return {
         v: PROTOCOL_VERSION,
         type: "snapshot",
         id,
         snapshot: {
           type: "keybindings",
-          data: keybindings.getSnapshot(),
+          data,
         },
       }
     }
 
     if (topic.type === "app-settings") {
+      const settings = buildSettingsAdapters(store.userId)
+      const data = await Promise.resolve(settings.appSettings.getSnapshot())
       return {
         v: PROTOCOL_VERSION,
         type: "snapshot",
         id,
         snapshot: {
           type: "app-settings",
-          data: resolvedAppSettings.getSnapshot(),
+          data,
         },
       }
     }
@@ -795,6 +860,11 @@ export function createWsRouter({
       }
     }
 
+    const scopedStore = getActiveEventStore()
+    if ("ensureMessagesLoaded" in scopedStore && typeof scopedStore.ensureMessagesLoaded === "function") {
+      await scopedStore.ensureMessagesLoaded(topic.chatId)
+    }
+
     return {
       v: PROTOCOL_VERSION,
       type: "snapshot",
@@ -816,6 +886,7 @@ export function createWsRouter({
     ws: ServerWebSocket<ClientState>,
     options?: { skipPrune?: boolean; filter?: SnapshotBroadcastFilter; cache?: SnapshotComputationCache }
   ) {
+    return withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
     const pushStartedAt = performance.now()
     if (!options?.skipPrune) {
       await maybePruneStaleEmptyChats([ws])
@@ -828,7 +899,7 @@ export function createWsRouter({
         continue
       }
       const envelopeStartedAt = performance.now()
-      const envelope = createEnvelope(id, topic, options?.cache)
+      const envelope = await createEnvelope(id, topic, options?.cache)
       const createdAt = performance.now()
       if (envelope.type !== "snapshot") continue
       const signature = topic.type === "sidebar"
@@ -871,6 +942,7 @@ export function createWsRouter({
         ...countSubscriptionsByTopic(ws),
       }))
     }
+    })
   }
 
   async function broadcastSnapshots() {
@@ -893,11 +965,12 @@ export function createWsRouter({
     }
   }
 
-  async function broadcastFilteredSnapshots(filter: SnapshotBroadcastFilter) {
+  async function broadcastFilteredSnapshots(filter: SnapshotBroadcastFilter, onlyUserId?: string) {
     const startedAt = performance.now()
     let socketCount = 0
     const cache: SnapshotComputationCache = {}
     for (const ws of sockets) {
+      if (onlyUserId && ws.data.userId !== onlyUserId) continue
       socketCount += 1
       await pushSnapshots(ws, { skipPrune: true, filter, cache })
     }
@@ -914,6 +987,7 @@ export function createWsRouter({
   }
 
   function scheduleBroadcast() {
+    const notifyUserId = tryGetActiveUserId()
     pendingBroadcastAll = true
     pendingBroadcastChatIds.clear()
     if (pendingBroadcastTimer) {
@@ -926,19 +1000,25 @@ export function createWsRouter({
       pendingBroadcastAll = false
       pendingBroadcastChatIds.clear()
       if (shouldBroadcastAll) {
-        void broadcastSnapshots()
-        return
-      }
-      if (chatIds.size > 0) {
+        if (storeResolver.isMultiTenant && notifyUserId) {
+          void broadcastSnapshotsForUser(notifyUserId)
+        } else {
+          void broadcastSnapshots()
+        }
+      } else if (chatIds.size > 0) {
         void broadcastFilteredSnapshots({
           includeSidebar: true,
           chatIds,
-        })
+        }, storeResolver.isMultiTenant ? notifyUserId ?? undefined : undefined)
+      }
+      if (notifyUserId && storeResolver.isMultiTenant) {
+        void realtimeHub?.publishUserUpdate(notifyUserId)
       }
     }, 16)
   }
 
   function scheduleChatStateBroadcast(chatId: string) {
+    const notifyUserId = tryGetActiveUserId()
     if (!pendingBroadcastAll) {
       pendingBroadcastChatIds.add(chatId)
     }
@@ -952,27 +1032,56 @@ export function createWsRouter({
       pendingBroadcastAll = false
       pendingBroadcastChatIds.clear()
       if (shouldBroadcastAll) {
-        void broadcastSnapshots()
+        if (storeResolver.isMultiTenant && notifyUserId) {
+          void broadcastSnapshotsForUser(notifyUserId)
+        } else {
+          void broadcastSnapshots()
+        }
         return
       }
       if (chatIds.size > 0) {
         void broadcastFilteredSnapshots({
           includeSidebar: true,
           chatIds,
-        })
+        }, storeResolver.isMultiTenant ? notifyUserId ?? undefined : undefined)
       }
     }, 16)
   }
 
-  async function broadcastChatAndSidebar(chatId: string) {
+  async function broadcastChatAndSidebar(chatId: string, onlyUserId?: string) {
     await broadcastFilteredSnapshots({
       includeSidebar: true,
       chatIds: new Set([chatId]),
-    })
+    }, onlyUserId ?? activeBroadcastUserId())
+  }
+
+  function activeBroadcastUserId() {
+    return storeResolver.isMultiTenant ? (tryGetActiveUserId() ?? undefined) : undefined
+  }
+
+  async function broadcastSidebarForActiveUser() {
+    await broadcastFilteredSnapshots({ includeSidebar: true }, activeBroadcastUserId())
   }
 
   async function broadcastChatStateImmediately(chatId: string) {
-    await broadcastChatAndSidebar(chatId)
+    const activeUserId = tryGetActiveUserId()
+    if (activeUserId) {
+      await broadcastChatAndSidebar(chatId, activeUserId)
+      return
+    }
+
+    for (const ws of sockets) {
+      await withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
+        if (!store.getChat(chatId)) return
+        await pushSnapshots(ws, {
+          skipPrune: true,
+          filter: {
+            includeSidebar: true,
+            chatIds: new Set([chatId]),
+          },
+        })
+      })
+    }
   }
 
   function broadcastError(message: string) {
@@ -987,16 +1096,18 @@ export function createWsRouter({
 
   function pushTerminalSnapshot(terminalId: string) {
     for (const ws of sockets) {
+      void withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
         if (topic.type !== "terminal" || topic.terminalId !== terminalId) continue
-        const envelope = createEnvelope(id, topic)
+        const envelope = await createEnvelope(id, topic)
         if (envelope.type !== "snapshot") continue
         const signature = JSON.stringify(envelope.snapshot)
         if (snapshotSignatures.get(id) === signature) continue
         snapshotSignatures.set(id, signature)
         send(ws, envelope)
       }
+      })
     }
   }
 
@@ -1020,46 +1131,52 @@ export function createWsRouter({
 
   const disposeKeybindingEvents = keybindings.onChange(() => {
     for (const ws of sockets) {
+      void withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
         if (topic.type !== "keybindings") continue
-        const envelope = createEnvelope(id, topic)
+        const envelope = await createEnvelope(id, topic)
         if (envelope.type !== "snapshot") continue
         const signature = JSON.stringify(envelope.snapshot)
         if (snapshotSignatures.get(id) === signature) continue
         snapshotSignatures.set(id, signature)
         send(ws, envelope)
       }
+      })
     }
   })
 
   const disposeAppSettingsEvents = resolvedAppSettings.onChange(() => {
     for (const ws of sockets) {
+      void withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
         if (topic.type !== "app-settings") continue
-        const envelope = createEnvelope(id, topic)
+        const envelope = await createEnvelope(id, topic)
         if (envelope.type !== "snapshot") continue
         const signature = JSON.stringify(envelope.snapshot)
         if (snapshotSignatures.get(id) === signature) continue
         snapshotSignatures.set(id, signature)
         send(ws, envelope)
       }
+      })
     }
   })
 
   const disposeUpdateEvents = updateManager?.onChange(() => {
     for (const ws of sockets) {
+      void withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
       const snapshotSignatures = ensureSnapshotSignatures(ws)
       for (const [id, topic] of ws.data.subscriptions.entries()) {
         if (topic.type !== "update") continue
-        const envelope = createEnvelope(id, topic)
+        const envelope = await createEnvelope(id, topic)
         if (envelope.type !== "snapshot") continue
         const signature = JSON.stringify(envelope.snapshot)
         if (snapshotSignatures.get(id) === signature) continue
         snapshotSignatures.set(id, signature)
         send(ws, envelope)
       }
+      })
     }
   }) ?? (() => {})
 
@@ -1074,6 +1191,8 @@ export function createWsRouter({
   }
 
   async function handleCommand(ws: ServerWebSocket<ClientState>, message: Extract<ClientEnvelope, { type: "command" }>) {
+    return withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
+    const userSettings = buildSettingsAdapters(ws.data.userId)
     const { command, id } = message
     try {
       switch (command.type) {
@@ -1143,24 +1262,24 @@ export function createWsRouter({
           return
         }
         case "settings.readKeybindings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: keybindings.getSnapshot() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await Promise.resolve(userSettings.keybindings.getSnapshot()) })
           return
         }
         case "settings.writeKeybindings": {
-          const snapshot = await keybindings.write(command.bindings)
+          const snapshot = await userSettings.keybindings.write(command.bindings)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           return
         }
         case "settings.readAppSettings": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: resolvedAppSettings.getSnapshot() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await Promise.resolve(userSettings.appSettings.getSnapshot()) })
           return
         }
         case "settings.writeAppSettings": {
-          const previousAnalyticsEnabled = resolvedAppSettings.getSnapshot().analyticsEnabled
+          const previousAnalyticsEnabled = (await Promise.resolve(userSettings.appSettings.getSnapshot())).analyticsEnabled
           if (previousAnalyticsEnabled && !command.analyticsEnabled) {
             resolvedAnalytics.track("analytics_disabled")
           }
-          const snapshot = await resolvedAppSettings.write({ analyticsEnabled: command.analyticsEnabled })
+          const snapshot = await userSettings.appSettings.write({ analyticsEnabled: command.analyticsEnabled })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           if (!previousAnalyticsEnabled && command.analyticsEnabled) {
             resolvedAnalytics.track("analytics_enabled")
@@ -1168,8 +1287,8 @@ export function createWsRouter({
           return
         }
         case "settings.writeAppSettingsPatch": {
-          const previousAnalyticsEnabled = resolvedAppSettings.getSnapshot().analyticsEnabled
-          const snapshot = await resolvedAppSettings.writePatch(command.patch)
+          const previousAnalyticsEnabled = (await Promise.resolve(userSettings.appSettings.getSnapshot())).analyticsEnabled
+          const snapshot = await userSettings.appSettings.writePatch(command.patch)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
           if (command.patch.analyticsEnabled !== undefined && previousAnalyticsEnabled && !snapshot.analyticsEnabled) {
             resolvedAnalytics.track("analytics_disabled")
@@ -1180,11 +1299,11 @@ export function createWsRouter({
           return
         }
         case "settings.readClaudeProvider": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await resolvedClaudeProvider.read() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await userSettings.claudeProvider.read() })
           return
         }
         case "settings.writeClaudeProvider": {
-          const snapshot = await resolvedClaudeProvider.write({
+          const snapshot = await userSettings.claudeProvider.write({
             apiKey: command.apiKey,
             baseUrl: command.baseUrl,
             customModels: command.customModels,
@@ -1195,7 +1314,7 @@ export function createWsRouter({
           return
         }
         case "settings.validateClaudeProvider": {
-          const result = await resolvedClaudeProvider.validate({
+          const result = await userSettings.claudeProvider.validate({
             apiKey: command.apiKey,
             baseUrl: command.baseUrl,
             customModels: command.customModels,
@@ -1205,11 +1324,11 @@ export function createWsRouter({
           return
         }
         case "settings.readLlmProvider": {
-          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await resolvedLlmProvider.read() })
+          send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: await userSettings.llmProvider.read() })
           return
         }
         case "settings.writeLlmProvider": {
-          const snapshot = await resolvedLlmProvider.write({
+          const snapshot = await userSettings.llmProvider.write({
             provider: command.provider,
             apiKey: command.apiKey,
             model: command.model,
@@ -1219,7 +1338,7 @@ export function createWsRouter({
           return
         }
         case "settings.validateLlmProvider": {
-          const result = await resolvedLlmProvider.validate({
+          const result = await userSettings.llmProvider.validate({
             provider: command.provider,
             apiKey: command.apiKey,
             model: command.model,
@@ -1276,7 +1395,7 @@ export function createWsRouter({
         case "project.rename": {
           await store.renameProjectSidebarTitle(command.projectId, command.title)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          await broadcastSidebarForActiveUser()
           return
         }
         case "project.remove": {
@@ -1288,7 +1407,7 @@ export function createWsRouter({
         case "sidebar.reorderProjectGroups": {
           await store.setSidebarProjectOrder(command.projectIds)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          await broadcastSidebarForActiveUser()
           return
         }
         case "project.readDiffPatch": {
@@ -1318,7 +1437,7 @@ export function createWsRouter({
         case "chat.fork": {
           const result = await agent.forkChat(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          await broadcastFilteredSnapshots({ includeSidebar: true }, activeBroadcastUserId())
           return
         }
         case "chat.rename": {
@@ -1330,7 +1449,7 @@ export function createWsRouter({
         case "chat.archive": {
           await store.archiveChat(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          await broadcastSidebarForActiveUser()
           return
         }
         case "chat.unarchive": {
@@ -1345,7 +1464,7 @@ export function createWsRouter({
           await store.deleteChat(command.chatId)
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id })
           resolvedAnalytics.track("chat_deleted")
-          await broadcastFilteredSnapshots({ includeSidebar: true })
+          await broadcastSidebarForActiveUser()
           return
         }
         case "chat.markRead": {
@@ -1635,7 +1754,11 @@ export function createWsRouter({
         }
       }
 
-      await broadcastSnapshots()
+      if (storeResolver.isMultiTenant) {
+        await broadcastSnapshotsForUser(ws.data.userId)
+      } else {
+        await broadcastSnapshots()
+      }
     } catch (error) {
       const messageText = error instanceof Error ? error.message : String(error)
       console.error("[ws-router] command failed", {
@@ -1644,6 +1767,14 @@ export function createWsRouter({
         message: messageText,
       })
       send(ws, { v: PROTOCOL_VERSION, type: "error", id, message: messageText })
+    }
+    })
+  }
+
+  async function broadcastSnapshotsForUser(userId: string) {
+    for (const ws of sockets) {
+      if (ws.data.userId !== userId) continue
+      await pushSnapshots(ws, { skipPrune: true })
     }
   }
 
@@ -1655,6 +1786,7 @@ export function createWsRouter({
       sockets.delete(ws)
     },
     broadcastSnapshots,
+    broadcastSnapshotsForUser,
     broadcastChatStateImmediately,
     scheduleBroadcast,
     scheduleChatStateBroadcast,
@@ -1674,6 +1806,7 @@ export function createWsRouter({
       }
 
       if (parsed.type === "subscribe") {
+        await withUserEventStore(storeResolver, agent, ws.data.userId, async () => {
         const snapshotSignatures = ensureSnapshotSignatures(ws)
         ws.data.subscriptions.set(parsed.id, parsed.topic)
         snapshotSignatures.delete(parsed.id)
@@ -1686,6 +1819,7 @@ export function createWsRouter({
           return
         }
         await pushSnapshots(ws, { skipPrune: true })
+        })
         return
       }
 

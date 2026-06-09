@@ -46,7 +46,10 @@ function withSidebarGroupDefaults(group: {
 class FakeWebSocket {
   readonly sent: unknown[] = []
   readonly data = {
+    userId: "__local__",
+    username: "local",
     subscriptions: new Map(),
+    snapshotSignatures: new Map(),
     protectedDraftChatIds: new Set<string>(),
   }
 
@@ -871,6 +874,81 @@ describe("ws-router", () => {
     expect(activeStatusCalls).toBe(1)
     expect(wsA.sent).toHaveLength(1)
     expect(wsB.sent).toHaveLength(1)
+  })
+
+  test("does not reuse sidebar cache across different users during broadcast", async () => {
+    const stateA = createEmptyState()
+    stateA.projectsById.set("project-a", {
+      id: "project-a",
+      localPath: "/tmp/project-a",
+      title: "User A Project",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    const stateB = createEmptyState()
+    stateB.projectsById.set("project-b", {
+      id: "project-b",
+      localPath: "/tmp/project-b",
+      title: "User B Project",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+
+    const stores = {
+      "user-a": {
+        userId: "user-a",
+        state: stateA,
+        getSidebarProjectOrder: () => [],
+      },
+      "user-b": {
+        userId: "user-b",
+        state: stateB,
+        getSidebarProjectOrder: () => [],
+      },
+    }
+
+    const router = createWsRouter({
+      storeResolver: {
+        dataDir: "/tmp",
+        isMultiTenant: true,
+        initialize: async () => {},
+        forUser: async (userId: string) => stores[userId as keyof typeof stores] as never,
+        migrateLegacyTranscripts: async () => false,
+        compact: async () => {},
+      },
+      agent: {
+        getActiveStatuses: () => new Map(),
+        getDrainingChatIds: () => new Set(),
+      } as never,
+      terminals: {
+        getSnapshot: () => null,
+        onEvent: () => () => {},
+      } as never,
+      keybindings: {
+        getSnapshot: () => DEFAULT_KEYBINDINGS_SNAPSHOT,
+        onChange: () => () => {},
+      } as never,
+      refreshDiscovery: async () => [],
+      getDiscoveredProjects: () => [],
+      machineDisplayName: "Local Machine",
+      updateManager: null,
+    })
+
+    const wsA = new FakeWebSocket()
+    wsA.data.userId = "user-a"
+    const wsB = new FakeWebSocket()
+    wsB.data.userId = "user-b"
+    router.handleOpen(wsA as never)
+    router.handleOpen(wsB as never)
+    wsA.data.subscriptions.set("sidebar-a", { type: "sidebar" })
+    wsB.data.subscriptions.set("sidebar-b", { type: "sidebar" })
+
+    await router.broadcastSnapshots()
+
+    const sidebarA = (wsA.sent[0] as { snapshot: { data: { projectGroups: Array<{ title: string }> } } }).snapshot.data.projectGroups[0]?.title
+    const sidebarB = (wsB.sent[0] as { snapshot: { data: { projectGroups: Array<{ title: string }> } } }).snapshot.data.projectGroups[0]?.title
+    expect(sidebarA).toBe("User A Project")
+    expect(sidebarB).toBe("User B Project")
   })
 
   test("subscribes to project git snapshots independently from chat snapshots", async () => {
