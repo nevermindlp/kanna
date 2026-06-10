@@ -1,10 +1,118 @@
 # Deploy assets
 
-Production deployment templates for Kanna.
+Kanna 部署模板与快速命令。完整说明见 [`docs/production-deployment.md`](../docs/production-deployment.md)。
 
-| File | Purpose |
+| 文件 | 用途 |
 |------|---------|
-| [`env.example`](env.example) | Environment variables for multiuser production |
-| [`kanna.service.example`](kanna.service.example) | systemd unit file template |
+| [`env.example`](env.example) | multiuser 环境变量模板 |
+| [`kanna.service.example`](kanna.service.example) | systemd unit 模板 |
+| [`../Dockerfile`](../Dockerfile) | 多阶段 Bun 镜像（本地构建用） |
+| [`../docker-compose.multiuser.yml`](../docker-compose.multiuser.yml) | 中间件 + 可选 Kanna 容器 |
 
-Full guide: [`docs/production-deployment.md`](../docs/production-deployment.md)
+---
+
+## Docker Hub 全栈（推荐）
+
+镜像地址：[hilpdocker/kanna](https://hub.docker.com/r/hilpdocker/kanna)（**linux/amd64** + **linux/arm64**）
+
+```bash
+# 1. 拉取镜像（自动匹配当前 CPU 架构）
+docker pull hilpdocker/kanna:latest
+# 或固定单架构：docker pull hilpdocker/kanna:amd64
+
+# 2. 启动中间件
+mkdir -p projects
+docker compose -f docker-compose.multiuser.yml up -d
+
+# 3. 启动 Kanna（默认使用 Docker Hub 镜像）
+export KANNA_PROJECTS_DIR=./projects   # 可选
+docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
+
+# 4. 验收
+curl http://127.0.0.1:3210/health
+open http://127.0.0.1:3210
+```
+
+切换镜像版本：
+
+```bash
+export KANNA_IMAGE=hilpdocker/kanna:amd64
+docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
+```
+
+访问地址：
+
+| 服务 | URL | 默认凭据 |
+|------|-----|----------|
+| Kanna | http://127.0.0.1:3210 | 首次注册 |
+| MinIO 控制台 | http://127.0.0.1:9001 | `kanna` / `kanna_secret` |
+
+---
+
+## 镜像说明
+
+| 项 | 值 |
+|----|-----|
+| 仓库 | `hilpdocker/kanna` |
+| 标签 | `latest`（多架构）/ `amd64` / `arm64` |
+| 架构 | `linux/amd64`、`linux/arm64` |
+| 基础 | `oven/bun:1.3.5` |
+| 端口 | `3210` |
+| 内置 | Web UI、`KANNA_DISABLE_SELF_UPDATE=1`、健康检查 |
+| 不含 | Claude/Codex CLI、Git、用户项目（需挂载） |
+
+```bash
+# 查看多架构 manifest
+docker manifest inspect hilpdocker/kanna:latest
+
+# 检查 Bun 版本
+docker run --rm --entrypoint bun hilpdocker/kanna:latest --version   # 1.3.5
+```
+
+---
+
+## 本地构建（可选）
+
+源码改动或无法访问 Docker Hub 时：
+
+```bash
+docker build -t hilpdocker/kanna:local .
+export KANNA_IMAGE=hilpdocker/kanna:local
+docker compose -f docker-compose.multiuser.yml --profile app up -d --build
+```
+
+---
+
+## 生产推荐：中间件 Docker + 宿主机 Kanna
+
+```bash
+# 仅中间件
+docker compose -f docker-compose.multiuser.yml up -d
+
+# 宿主机配置
+cp deploy/env.example /etc/kanna/env
+# 编辑 DATABASE_URL / REDIS_URL / KANNA_S3_* 指向 127.0.0.1
+
+sudo cp deploy/kanna.service.example /etc/systemd/system/kanna.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now kanna
+```
+
+---
+
+## 常用运维
+
+```bash
+# 拉取新版本并滚动重启
+docker pull hilpdocker/kanna:latest
+docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
+
+# 日志
+docker compose -f docker-compose.multiuser.yml --profile app logs -f kanna
+
+# 停止 Kanna 容器
+docker compose -f docker-compose.multiuser.yml --profile app stop kanna
+
+# 停止全部（保留数据卷）
+docker compose -f docker-compose.multiuser.yml down
+```

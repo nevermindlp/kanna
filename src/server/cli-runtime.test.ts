@@ -4,6 +4,7 @@ import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 
 const originalRuntimeProfile = process.env.KANNA_RUNTIME_PROFILE
 const originalSuppressOpen = process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR]
+const originalTrustProxy = process.env.KANNA_TRUST_PROXY
 
 afterEach(() => {
   if (originalRuntimeProfile === undefined) {
@@ -15,6 +16,11 @@ afterEach(() => {
     delete process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR]
   } else {
     process.env[CLI_SUPPRESS_OPEN_ONCE_ENV_VAR] = originalSuppressOpen
+  }
+  if (originalTrustProxy === undefined) {
+    delete process.env.KANNA_TRUST_PROXY
+  } else {
+    process.env.KANNA_TRUST_PROXY = originalTrustProxy
   }
 })
 
@@ -348,6 +354,15 @@ describe("runCli", () => {
     await runCli(["--port", "4000"], deps)
 
     expect(calls.openUrl).toEqual([])
+  })
+
+  test("enables trustProxy when KANNA_TRUST_PROXY is set", async () => {
+    process.env.KANNA_TRUST_PROXY = "1"
+    const { calls, deps } = createDeps()
+
+    await runCli(["--port", "4000", "--no-open"], deps)
+
+    expect(calls.startServer[0]?.trustProxy).toBe(true)
   })
 
   test("starts a share tunnel and prints qr/public/local urls", async () => {

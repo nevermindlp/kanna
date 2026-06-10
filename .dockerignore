@@ -1,0 +1,15 @@
+.git
+.cursor
+node_modules
+dist
+*.md
+!docs/production-deployment.md
+.env
+.env.*
+.kanna
+projects
+coverage
+**/*.test.ts
+**/*.test.tsx
+scripts/dev.ts
+scripts/dev-server.ts

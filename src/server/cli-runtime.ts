@@ -6,6 +6,7 @@ import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
 import type { UpdateInstallErrorCode } from "../shared/types"
 import { PROD_SERVER_PORT } from "../shared/ports"
+import { resolveTrustProxy } from "./kanna-config"
 import { CLI_SUPPRESS_OPEN_ONCE_ENV_VAR } from "./restart"
 import { logShareDetails, renderTerminalQr, startShareTunnel, type StartedShareTunnel } from "./share"
 
@@ -271,7 +272,7 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
 
   const { port, stop } = await deps.startServer({
     ...parsedArgs.options,
-    trustProxy: isShareEnabled(parsedArgs.options.share),
+    trustProxy: isShareEnabled(parsedArgs.options.share) || resolveTrustProxy(),
     onMigrationProgress: deps.log,
     update: {
       version: deps.version,

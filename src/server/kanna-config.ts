@@ -65,3 +65,9 @@ export function isMultiUserEnabled(config: KannaRuntimeConfig) {
 export function isMysqlStorageEnabled(config: KannaRuntimeConfig) {
   return config.storageMode === "mysql"
 }
+
+export function resolveTrustProxy(env: NodeJS.ProcessEnv = process.env): boolean {
+  const raw = env.KANNA_TRUST_PROXY?.trim().toLowerCase()
+  if (!raw) return false
+  return raw === "1" || raw === "true" || raw === "yes"
+}

@@ -36,6 +36,65 @@ services:
     volumes:
       - kanna_minio_data:/data
 
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_started
+    entrypoint: /bin/sh
+    command:
+      - -c
+      - |
+        until mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"; do
+          echo "waiting for minio..."
+          sleep 2
+        done
+        mc mb --ignore-existing local/kanna
+    environment:
+      MINIO_ROOT_USER: kanna
+      MINIO_ROOT_PASSWORD: kanna_secret
+    restart: "no"
+
+  # Optional: Kanna app container (requires Claude/Codex on host or in image, plus project mounts).
+  # Pull: docker pull hilpdocker/kanna:latest
+  # Start: docker compose -f docker-compose.multiuser.yml --profile app up -d
+  kanna:
+    profiles: ["app"]
+    image: ${KANNA_IMAGE:-hilpdocker/kanna:latest}
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_started
+      minio-init:
+        condition: service_completed_successfully
+    ports:
+      - "3210:3210"
+    environment:
+      KANNA_RUNTIME_PROFILE: prod
+      KANNA_AUTH_MODE: multiuser
+      KANNA_STORAGE: mysql
+      DATABASE_URL: mysql://kanna:kanna_secret@mysql:3306/kanna
+      REDIS_URL: redis://redis:6379
+      KANNA_S3_ENDPOINT: http://minio:9000
+      KANNA_S3_REGION: us-east-1
+      KANNA_S3_BUCKET: kanna
+      KANNA_S3_ACCESS_KEY_ID: kanna
+      KANNA_S3_SECRET_ACCESS_KEY: kanna_secret
+      KANNA_SECRETS_KEY: dev-kanna-secrets-key-32bytes!!
+      KANNA_DISABLE_SELF_UPDATE: "1"
+      KANNA_TRUST_PROXY: "0"
+    volumes:
+      - kanna_data:/root/.kanna
+      # Replace with your host projects directory for agent cwd access:
+      - ${KANNA_PROJECTS_DIR:-./projects}:/projects
+    command: ["--host", "0.0.0.0", "--port", "3210", "--no-open", "--strict-port"]
+
 volumes:
   kanna_mysql_data:
   kanna_minio_data:
+  kanna_data:
