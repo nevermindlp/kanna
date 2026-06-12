@@ -13,9 +13,23 @@ export interface KannaRuntimeConfig {
     bucket: string | null
     accessKeyId: string | null
     secretAccessKey: string | null
+    /** Optional key prefix inside the bucket, e.g. AI-codeflow from obs://bucket/AI-codeflow */
+    keyPrefix: string | null
     /** null = auto-detect from endpoint (MinIO/local → path-style; OBS/cloud → virtual-host) */
     forcePathStyle: boolean | null
   }
+}
+
+export function normalizeS3KeyPrefix(prefix: string | null | undefined): string | null {
+  const trimmed = prefix?.trim().replace(/^\/+|\/+$/g, "")
+  return trimmed || null
+}
+
+export function normalizeS3Endpoint(endpoint: string | null | undefined): string | null {
+  const trimmed = endpoint?.trim()
+  if (!trimmed) return null
+  if (/^https?:\/\//i.test(trimmed)) return trimmed
+  return `https://${trimmed}`
 }
 
 function parseOptionalBooleanEnv(value: string | undefined): boolean | null {
@@ -76,11 +90,12 @@ export function resolveKannaRuntimeConfig(env: NodeJS.ProcessEnv = process.env):
     redisUrl: env.REDIS_URL?.trim() || null,
     secretsKey: env.KANNA_SECRETS_KEY?.trim() || null,
     s3: {
-      endpoint: env.KANNA_S3_ENDPOINT?.trim() || null,
+      endpoint: normalizeS3Endpoint(env.KANNA_S3_ENDPOINT),
       region: env.KANNA_S3_REGION?.trim() || "us-east-1",
       bucket: env.KANNA_S3_BUCKET?.trim() || null,
       accessKeyId: env.KANNA_S3_ACCESS_KEY_ID?.trim() || null,
       secretAccessKey: env.KANNA_S3_SECRET_ACCESS_KEY?.trim() || null,
+      keyPrefix: normalizeS3KeyPrefix(env.KANNA_S3_KEY_PREFIX),
       forcePathStyle: parseOptionalBooleanEnv(env.KANNA_S3_FORCE_PATH_STYLE),
     },
   }

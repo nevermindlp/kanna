@@ -28,7 +28,8 @@ docker compose -f docker-compose.multiuser.yml up -d
 export KANNA_PROJECTS_DIR=./projects   # 可选
 export KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
 export KANNA_S3_REGION=cn-north-4
-export KANNA_S3_BUCKET=kanna-attachments-prod
+export KANNA_S3_BUCKET=c-poc-storage
+export KANNA_S3_KEY_PREFIX=AI-codeflow
 export KANNA_S3_ACCESS_KEY_ID=***
 export KANNA_S3_SECRET_ACCESS_KEY=***
 docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
@@ -72,10 +73,11 @@ sudo systemctl enable --now kanna
 
 ### 华为云 OBS 开通要点
 
-1. 控制台创建 **私有** 桶（如 `kanna-attachments-prod`），记录 region（如 `cn-north-4`）
-2. IAM 用户开启编程访问，授予该桶的 PutObject / GetObject 权限
-3. 在 `/etc/kanna/env` 配置 `KANNA_S3_ENDPOINT=https://obs.{region}.myhuaweicloud.com` 及 AK/SK
-4. 确保宿主机可 HTTPS 访问 OBS endpoint（VPC 内可使用内网域名）
+1. 控制台创建 **私有** 桶（如 `c-poc-storage`），记录 region（如 `cn-north-4`）
+2. 确定桶内目录前缀（如 `obs://c-poc-storage/AI-codeflow` → `KANNA_S3_KEY_PREFIX=AI-codeflow`）
+3. IAM 用户开启编程访问，授予该桶的 PutObject / GetObject 权限
+4. 在 `/etc/kanna/env` 配置 `KANNA_S3_ENDPOINT=https://obs.{region}.myhuaweicloud.com` 及 AK/SK
+5. 确保宿主机可 HTTPS 访问 OBS endpoint（VPC 内可使用内网域名）
 
 ---
 

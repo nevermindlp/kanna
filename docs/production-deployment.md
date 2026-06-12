@@ -34,7 +34,8 @@ DATABASE_URL=mysql://kanna:***@127.0.0.1:3306/kanna
 REDIS_URL=redis://127.0.0.1:6379
 KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
 KANNA_S3_REGION=cn-north-4
-KANNA_S3_BUCKET=kanna-attachments-prod
+KANNA_S3_BUCKET=c-poc-storage
+KANNA_S3_KEY_PREFIX=AI-codeflow
 KANNA_S3_ACCESS_KEY_ID=***
 KANNA_S3_SECRET_ACCESS_KEY=***
 KANNA_SECRETS_KEY=***                 # 32+ 字节，加密用户 Provider API Key
@@ -174,7 +175,8 @@ export KANNA_PROJECTS_DIR=/path/to/your/projects   # 可选，默认 ./projects
 # 华为云 OBS（或本地 MinIO 调试时的 endpoint）
 export KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
 export KANNA_S3_REGION=cn-north-4
-export KANNA_S3_BUCKET=kanna-attachments-prod
+export KANNA_S3_BUCKET=c-poc-storage
+export KANNA_S3_KEY_PREFIX=AI-codeflow
 export KANNA_S3_ACCESS_KEY_ID=***
 export KANNA_S3_SECRET_ACCESS_KEY=***
 # 可选：export KANNA_IMAGE=hilpdocker/kanna:amd64
@@ -203,7 +205,8 @@ docker run -d \
   -e REDIS_URL=redis://redis:6379 \
   -e KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com \
   -e KANNA_S3_REGION=cn-north-4 \
-  -e KANNA_S3_BUCKET=kanna-attachments-prod \
+  -e KANNA_S3_BUCKET=c-poc-storage \
+  -e KANNA_S3_KEY_PREFIX=AI-codeflow \
   -e KANNA_S3_ACCESS_KEY_ID=*** \
   -e KANNA_S3_SECRET_ACCESS_KEY=*** \
   -e KANNA_SECRETS_KEY=dev-kanna-secrets-key-32bytes!! \
@@ -337,14 +340,16 @@ DATABASE_URL='mysql://...' bun run scripts/reset-kanna-db.ts
 
 **生产推荐：华为云 OBS**
 
-1. 控制台 → 对象存储 OBS → 创建 **私有** 桶（如 `kanna-attachments-prod`）
+1. 控制台 → 对象存储 OBS → 创建 **私有** 桶（如 `c-poc-storage`）
 2. IAM → 创建用户 → 编程访问 → 授予该桶 PutObject / GetObject 权限 → 获取 AK/SK
 3. 宿主机 `/etc/kanna/env` 配置（endpoint 必须为 **区域级** 域名，不要写 `bucketname.obs...`）：
 
 ```bash
+# obs://c-poc-storage/AI-codeflow → bucket=c-poc-storage, prefix=AI-codeflow
 KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
 KANNA_S3_REGION=cn-north-4
-KANNA_S3_BUCKET=kanna-attachments-prod
+KANNA_S3_BUCKET=c-poc-storage
+KANNA_S3_KEY_PREFIX=AI-codeflow
 KANNA_S3_ACCESS_KEY_ID=***
 KANNA_S3_SECRET_ACCESS_KEY=***
 # 可选，一般无需设置（OBS 默认 virtual-host）：
@@ -486,6 +491,7 @@ HTTPS 反代后设置 `KANNA_TRUST_PROXY=1`。Docker 直连访问保持 `KANNA_T
 | `DATABASE_URL` | multiuser 或 mysql 存储 | MySQL 连接串 |
 | `REDIS_URL` | 多实例建议 | 跨实例 WS 同步 |
 | `KANNA_S3_*` | multiuser 附件 | endpoint / region / bucket / AK/SK |
+| `KANNA_S3_KEY_PREFIX` | 可选 | 桶内对象前缀，如 `AI-codeflow`（对应 `obs://bucket/prefix`） |
 | `KANNA_S3_FORCE_PATH_STYLE` | 可选 | `1`/`0`；未设置时按 endpoint 自动推断（OBS→virtual-host，MinIO→path-style） |
 | `KANNA_SECRETS_KEY` | multiuser 建议 | 加密 `user_providers` API Key |
 | `KANNA_TRUST_PROXY` | HTTPS 反代时 | `1` / `true` / `yes` |

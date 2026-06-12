@@ -1,6 +1,10 @@
 import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
 import { randomUUID } from "node:crypto"
-import { resolveS3ForcePathStyle, type KannaRuntimeConfig } from "./kanna-config"
+import {
+  normalizeS3KeyPrefix,
+  resolveS3ForcePathStyle,
+  type KannaRuntimeConfig,
+} from "./kanna-config"
 import type { ChatAttachment } from "../shared/types"
 
 const DEFAULT_BINARY_MIME_TYPE = "application/octet-stream"
@@ -21,22 +25,46 @@ export function parseObjectKeyFromContentUrl(contentUrl: string): string | null 
   return decodeURIComponent(encoded)
 }
 
-export function isOwnedObjectKey(objectKey: string, userId: string): boolean {
-  return objectKey.startsWith(`${userId}/`)
+export function buildAttachmentObjectKey(args: {
+  userId: string
+  projectId: string
+  fileName: string
+  keyPrefix?: string | null
+  objectId?: string
+}): string {
+  const objectId = args.objectId ?? randomUUID()
+  const logicalKey = `${args.userId}/${args.projectId}/${objectId}-${args.fileName}`
+  const prefix = normalizeS3KeyPrefix(args.keyPrefix)
+  return prefix ? `${prefix}/${logicalKey}` : logicalKey
+}
+
+export function isOwnedObjectKey(
+  objectKey: string,
+  userId: string,
+  keyPrefix?: string | null,
+): boolean {
+  const prefix = normalizeS3KeyPrefix(keyPrefix)
+  const logicalKey = prefix && objectKey.startsWith(`${prefix}/`)
+    ? objectKey.slice(prefix.length + 1)
+    : objectKey
+  return logicalKey.startsWith(`${userId}/`)
 }
 
 export class ObjectStorageService {
   private readonly client: S3Client | null
   private readonly bucket: string | null
+  private readonly keyPrefix: string | null
 
   constructor(config: KannaRuntimeConfig) {
     if (!config.s3.bucket || !config.s3.accessKeyId || !config.s3.secretAccessKey) {
       this.client = null
       this.bucket = null
+      this.keyPrefix = null
       return
     }
 
     this.bucket = config.s3.bucket
+    this.keyPrefix = config.s3.keyPrefix
     this.client = new S3Client({
       region: config.s3.region,
       endpoint: config.s3.endpoint ?? undefined,
@@ -67,7 +95,7 @@ export class ObjectStorageService {
   }
 
   isOwnedObjectKey(objectKey: string, userId: string) {
-    return isOwnedObjectKey(objectKey, userId)
+    return isOwnedObjectKey(objectKey, userId, this.keyPrefix)
   }
 
   async uploadAttachment(args: {
@@ -81,7 +109,12 @@ export class ObjectStorageService {
       throw new Error("Object storage is not configured")
     }
 
-    const objectKey = `${args.userId}/${args.projectId}/${randomUUID()}-${args.fileName}`
+    const objectKey = buildAttachmentObjectKey({
+      userId: args.userId,
+      projectId: args.projectId,
+      fileName: args.fileName,
+      keyPrefix: this.keyPrefix,
+    })
     await this.client.send(new PutObjectCommand({
       Bucket: this.bucket,
       Key: objectKey,

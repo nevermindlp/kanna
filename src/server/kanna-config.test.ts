@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { resolveKannaRuntimeConfig, resolveS3ForcePathStyle, resolveTrustProxy } from "./kanna-config"
+import { resolveKannaRuntimeConfig, resolveS3ForcePathStyle, resolveTrustProxy, normalizeS3Endpoint, normalizeS3KeyPrefix } from "./kanna-config"
 
 describe("resolveTrustProxy", () => {
   test("returns false when unset", () => {
@@ -25,16 +25,18 @@ describe("resolveKannaRuntimeConfig S3", () => {
     const config = resolveKannaRuntimeConfig({
       KANNA_AUTH_MODE: "multiuser",
       DATABASE_URL: "mysql://kanna:secret@127.0.0.1:3306/kanna",
-      KANNA_S3_ENDPOINT: "https://obs.cn-north-4.myhuaweicloud.com",
+      KANNA_S3_ENDPOINT: "obs.cn-north-4.myhuaweicloud.com",
       KANNA_S3_REGION: "cn-north-4",
-      KANNA_S3_BUCKET: "kanna-attachments-prod",
+      KANNA_S3_BUCKET: "c-poc-storage",
+      KANNA_S3_KEY_PREFIX: "AI-codeflow",
       KANNA_S3_ACCESS_KEY_ID: "ak",
       KANNA_S3_SECRET_ACCESS_KEY: "sk",
     })
 
     expect(config.s3.endpoint).toBe("https://obs.cn-north-4.myhuaweicloud.com")
     expect(config.s3.region).toBe("cn-north-4")
-    expect(config.s3.bucket).toBe("kanna-attachments-prod")
+    expect(config.s3.bucket).toBe("c-poc-storage")
+    expect(config.s3.keyPrefix).toBe("AI-codeflow")
     expect(config.s3.forcePathStyle).toBeNull()
   })
 
@@ -45,6 +47,19 @@ describe("resolveKannaRuntimeConfig S3", () => {
     })
 
     expect(config.s3.forcePathStyle).toBe(true)
+  })
+})
+
+describe("normalizeS3Endpoint", () => {
+  test("adds https when scheme is omitted", () => {
+    expect(normalizeS3Endpoint("obs.cn-north-4.myhuaweicloud.com"))
+      .toBe("https://obs.cn-north-4.myhuaweicloud.com")
+  })
+})
+
+describe("normalizeS3KeyPrefix", () => {
+  test("strips leading and trailing slashes", () => {
+    expect(normalizeS3KeyPrefix("/AI-codeflow/")).toBe("AI-codeflow")
   })
 })
 

@@ -82,9 +82,10 @@ services:
       KANNA_STORAGE: mysql
       DATABASE_URL: mysql://kanna:kanna_secret@mysql:3306/kanna
       REDIS_URL: redis://redis:6379
-      KANNA_S3_ENDPOINT: ${KANNA_S3_ENDPOINT:-}
+      KANNA_S3_ENDPOINT: ${KANNA_S3_ENDPOINT:-https://obs.cn-north-4.myhuaweicloud.com}
       KANNA_S3_REGION: ${KANNA_S3_REGION:-cn-north-4}
-      KANNA_S3_BUCKET: ${KANNA_S3_BUCKET:-}
+      KANNA_S3_BUCKET: ${KANNA_S3_BUCKET:-c-poc-storage}
+      KANNA_S3_KEY_PREFIX: ${KANNA_S3_KEY_PREFIX:-AI-codeflow}
       KANNA_S3_ACCESS_KEY_ID: ${KANNA_S3_ACCESS_KEY_ID:-}
       KANNA_S3_SECRET_ACCESS_KEY: ${KANNA_S3_SECRET_ACCESS_KEY:-}
       KANNA_S3_FORCE_PATH_STYLE: ${KANNA_S3_FORCE_PATH_STYLE:-}
