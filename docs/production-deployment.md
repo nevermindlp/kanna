@@ -7,7 +7,7 @@
 | 文件 | 用途 |
 |------|------|
 | [`Dockerfile`](../Dockerfile) | 多阶段 Bun 镜像（本地构建 / CI） |
-| [`docker-compose.multiuser.yml`](../docker-compose.multiuser.yml) | MySQL / Redis / MinIO / Kanna（可选） |
+| [`docker-compose.multiuser.yml`](../docker-compose.multiuser.yml) | MySQL / Redis / Kanna（可选） |
 | [`deploy/env.example`](../deploy/env.example) | multiuser 环境变量模板 |
 | [`deploy/kanna.service.example`](../deploy/kanna.service.example) | systemd unit 模板 |
 | [`deploy/README.md`](../deploy/README.md) | 快速命令速查 |
@@ -24,16 +24,17 @@
 | **B. 中间件容器 + 宿主机 Kanna** | 生产推荐（Agent 在宿主机） | Bun / systemd 裸机 | compose 仅起中间件 |
 | **C. single 模式** | 个人单机 | 宿主机 `kanna` CLI | 无 |
 
-multiuser 模式必需 **MySQL**；附件存储需要 **MinIO / S3**；多 Kanna 实例横向扩展建议 **Redis**。
+multiuser 模式必需 **MySQL**；附件存储需要 **S3 兼容对象存储**（生产推荐华为云 OBS）；多 Kanna 实例横向扩展建议 **Redis**。
 
 ```bash
 # multiuser 推荐环境变量组合
 KANNA_AUTH_MODE=multiuser
 KANNA_STORAGE=mysql
-DATABASE_URL=mysql://kanna:***@mysql:3306/kanna
-REDIS_URL=redis://redis:6379
-KANNA_S3_ENDPOINT=http://minio:9000
-KANNA_S3_BUCKET=kanna
+DATABASE_URL=mysql://kanna:***@127.0.0.1:3306/kanna
+REDIS_URL=redis://127.0.0.1:6379
+KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
+KANNA_S3_REGION=cn-north-4
+KANNA_S3_BUCKET=kanna-attachments-prod
 KANNA_S3_ACCESS_KEY_ID=***
 KANNA_S3_SECRET_ACCESS_KEY=***
 KANNA_SECRETS_KEY=***                 # 32+ 字节，加密用户 Provider API Key
@@ -148,15 +149,14 @@ docker compose -f docker-compose.multiuser.yml up -d
 |------|------|------|------|
 | mysql | `mysql:8.4` | 3306 | 用户/会话/对话数据 |
 | redis | `redis:7-alpine` | 6379 | 跨实例 WS 同步 |
-| minio | `minio/minio:latest` | 9000 / 9001 | 附件对象存储 |
-| minio-init | `minio/mc:latest` | — | 一次性任务，创建 `kanna` bucket |
 
-compose 内置开发用凭据（**生产必须修改**）：
+compose 内置 MySQL 开发凭据（**生产必须修改**）：
 
 | 组件 | 用户 | 密码 |
 |------|------|------|
 | MySQL | `kanna` | `kanna_secret` |
-| MinIO | `kanna` | `kanna_secret` |
+
+对象存储（附件）需单独配置 **华为云 OBS** 或 `--profile local-dev` 启动本地 MinIO（见 §5.3）。
 
 等待 MySQL 健康：
 
@@ -171,6 +171,12 @@ docker compose -f docker-compose.multiuser.yml ps
 
 ```bash
 export KANNA_PROJECTS_DIR=/path/to/your/projects   # 可选，默认 ./projects
+# 华为云 OBS（或本地 MinIO 调试时的 endpoint）
+export KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
+export KANNA_S3_REGION=cn-north-4
+export KANNA_S3_BUCKET=kanna-attachments-prod
+export KANNA_S3_ACCESS_KEY_ID=***
+export KANNA_S3_SECRET_ACCESS_KEY=***
 # 可选：export KANNA_IMAGE=hilpdocker/kanna:amd64
 
 docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
@@ -195,11 +201,11 @@ docker run -d \
   -e KANNA_STORAGE=mysql \
   -e DATABASE_URL=mysql://kanna:kanna_secret@mysql:3306/kanna \
   -e REDIS_URL=redis://redis:6379 \
-  -e KANNA_S3_ENDPOINT=http://minio:9000 \
-  -e KANNA_S3_REGION=us-east-1 \
-  -e KANNA_S3_BUCKET=kanna \
-  -e KANNA_S3_ACCESS_KEY_ID=kanna \
-  -e KANNA_S3_SECRET_ACCESS_KEY=kanna_secret \
+  -e KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com \
+  -e KANNA_S3_REGION=cn-north-4 \
+  -e KANNA_S3_BUCKET=kanna-attachments-prod \
+  -e KANNA_S3_ACCESS_KEY_ID=*** \
+  -e KANNA_S3_SECRET_ACCESS_KEY=*** \
   -e KANNA_SECRETS_KEY=dev-kanna-secrets-key-32bytes!! \
   -e KANNA_DISABLE_SELF_UPDATE=1 \
   -e KANNA_TRUST_PROXY=0 \
@@ -242,7 +248,7 @@ docker compose -f docker-compose.multiuser.yml --profile app logs -f kanna
 
 浏览器访问 http://127.0.0.1:3210 ，注册首个 multiuser 账号（用户名 ≥ 3，密码 ≥ 8）。
 
-MinIO 控制台：http://127.0.0.1:9001（`kanna` / `kanna_secret`）。
+上传聊天附件后，在华为云 OBS 控制台对应桶中应可见对象；启动日志中不应出现 object storage connectivity 警告。
 
 ### 3.5 停止与清理
 
@@ -274,16 +280,16 @@ flowchart TB
     Claude --> Projects
   end
 
-  subgraph middleware [中间件]
+  subgraph middleware [中间件与云服务]
     MySQL[(MySQL)]
     Redis[(Redis Pub/Sub)]
-    MinIO[(MinIO / S3)]
+    OBS[(华为云 OBS / S3)]
   end
 
   Browser --> Nginx --> App
   App --> MySQL
   App --> Redis
-  App --> MinIO
+  App --> OBS
 ```
 
 **重要约束**：Kanna 以 `project.localPath` 为 cwd 启动 Claude/Codex 子进程。实例必须能访问 **真实项目目录**（本地磁盘、NFS 等），不是纯无状态 API。
@@ -325,18 +331,60 @@ DATABASE_URL='mysql://...' bun run scripts/reset-kanna-db.ts
 
 单实例部署可省略 Redis。
 
-### 5.3 MinIO / S3（multiuser 附件必需）
+### 5.3 对象存储（multiuser 附件必需）
 
-**用途**：附件权威存储 + `attachment_objects` 表索引。
+**用途**：附件权威存储 + `attachment_objects` 表索引。Kanna 通过 S3 兼容 API（`PutObject` / `GetObject`）读写，浏览器经 `/api/attachments/` 代理访问，不暴露 OBS 直链。
 
-compose 中 `minio-init` 会自动创建 `kanna` bucket。手动部署：
+**生产推荐：华为云 OBS**
+
+1. 控制台 → 对象存储 OBS → 创建 **私有** 桶（如 `kanna-attachments-prod`）
+2. IAM → 创建用户 → 编程访问 → 授予该桶 PutObject / GetObject 权限 → 获取 AK/SK
+3. 宿主机 `/etc/kanna/env` 配置（endpoint 必须为 **区域级** 域名，不要写 `bucketname.obs...`）：
 
 ```bash
-docker exec <minio容器> mc alias set local http://127.0.0.1:9000 <user> <pass>
-docker exec <minio容器> mc mb local/kanna
+KANNA_S3_ENDPOINT=https://obs.cn-north-4.myhuaweicloud.com
+KANNA_S3_REGION=cn-north-4
+KANNA_S3_BUCKET=kanna-attachments-prod
+KANNA_S3_ACCESS_KEY_ID=***
+KANNA_S3_SECRET_ACCESS_KEY=***
+# 可选，一般无需设置（OBS 默认 virtual-host）：
+# KANNA_S3_FORCE_PATH_STYLE=0
 ```
 
-也可使用 AWS S3 / 阿里云 OSS（配置 endpoint；存在 endpoint 时代码使用 path-style）。
+| 区域 | `KANNA_S3_REGION` | `KANNA_S3_ENDPOINT` |
+|------|-------------------|---------------------|
+| 华北-北京四 | `cn-north-4` | `https://obs.cn-north-4.myhuaweicloud.com` |
+| 华东-上海一 | `cn-east-3` | `https://obs.cn-east-3.myhuaweicloud.com` |
+| 华南-广州 | `cn-south-1` | `https://obs.cn-south-1.myhuaweicloud.com` |
+
+启动时 Kanna 会对桶执行 `HeadBucket` 自检；失败会在日志中输出 `[kanna] Object storage connectivity check failed`。
+
+**故障排查**
+
+| 现象 | 处理 |
+|------|------|
+| `SignatureDoesNotMatch` | 检查 AK/SK；endpoint 勿含 bucket 前缀；region 与桶一致 |
+| `PermanentRedirect` | `KANNA_S3_REGION` 改为桶实际 region |
+| 连接超时 | 宿主机出网 / VPC 内网 endpoint；安全组放行 443 |
+| 读写风格不匹配 | 尝试 `KANNA_S3_FORCE_PATH_STYLE=0` 或 `1` |
+
+**本地开发：可选 MinIO**
+
+```bash
+docker compose -f docker-compose.multiuser.yml --profile local-dev up -d
+```
+
+```bash
+KANNA_S3_ENDPOINT=http://127.0.0.1:9000
+KANNA_S3_REGION=us-east-1
+KANNA_S3_BUCKET=kanna
+KANNA_S3_ACCESS_KEY_ID=kanna
+KANNA_S3_SECRET_ACCESS_KEY=kanna_secret
+```
+
+MinIO 控制台：http://127.0.0.1:9001（`kanna` / `kanna_secret`）。
+
+也可使用 AWS S3、阿里云 OSS 等 S3 兼容服务；自定义 endpoint 时 path-style 由 [`resolveS3ForcePathStyle`](../src/server/kanna-config.ts) 自动推断，或通过 `KANNA_S3_FORCE_PATH_STYLE` 覆盖。
 
 ---
 
@@ -373,7 +421,7 @@ Agent 需在宿主机直接访问 Claude/Codex 与项目目录时，推荐此模
 docker compose -f docker-compose.multiuser.yml up -d
 
 cp deploy/env.example /etc/kanna/env
-# 编辑：127.0.0.1 指向 compose 暴露的 MySQL/Redis/MinIO 端口
+# 编辑：127.0.0.1 指向 compose 暴露的 MySQL/Redis 端口；KANNA_S3_* 指向华为云 OBS
 
 set -a && source /etc/kanna/env && set +a
 kanna --host 0.0.0.0 --port 3210 --no-open --strict-port
@@ -437,7 +485,8 @@ HTTPS 反代后设置 `KANNA_TRUST_PROXY=1`。Docker 直连访问保持 `KANNA_T
 | `KANNA_STORAGE` | 可选 | `file` / `mysql` |
 | `DATABASE_URL` | multiuser 或 mysql 存储 | MySQL 连接串 |
 | `REDIS_URL` | 多实例建议 | 跨实例 WS 同步 |
-| `KANNA_S3_*` | multiuser 附件 | endpoint / region / bucket / key |
+| `KANNA_S3_*` | multiuser 附件 | endpoint / region / bucket / AK/SK |
+| `KANNA_S3_FORCE_PATH_STYLE` | 可选 | `1`/`0`；未设置时按 endpoint 自动推断（OBS→virtual-host，MinIO→path-style） |
 | `KANNA_SECRETS_KEY` | multiuser 建议 | 加密 `user_providers` API Key |
 | `KANNA_TRUST_PROXY` | HTTPS 反代时 | `1` / `true` / `yes` |
 | `KANNA_DISABLE_SELF_UPDATE` | Docker 建议 | `1` 跳过 npm 自更新检查 |
@@ -456,7 +505,7 @@ CLI 参数：`--port` `--host` `--remote` `--password` `--strict-port` `--no-ope
 | 健康 | `curl http://127.0.0.1:3210/health` |
 | 容器健康 | `docker ps` 中 kanna 为 `(healthy)` |
 | MySQL 连通 | 启动无 `DATABASE_URL` 报错 |
-| MinIO bucket | 上传附件成功 |
+| OBS 连通 | 启动无 object storage 警告；上传附件成功 |
 | Redis（多实例） | A 实例发消息，B 实例同用户页面自动刷新 |
 | Agent | 发起对话，Claude 正常响应（需 CLI 可用） |
 | WebSocket | DevTools 中 `/ws` 返回 101 |
@@ -465,11 +514,11 @@ CLI 参数：`--port` `--host` `--remote` `--password` `--strict-port` `--no-ope
 
 ## 10. 安全建议
 
-- 中间件使用强密码，MySQL/Redis/MinIO 不暴露公网
+- 中间件使用强密码，MySQL/Redis 不暴露公网；OBS 使用 IAM 最小权限 AK/SK
 - `KANNA_SECRETS_KEY` 随机 32+ 字节；丢失后无法解密已存 Provider 配置
 - multiuser 依赖 Session Cookie（`kanna_session`），生产务必 HTTPS
 - 限制 `--host 0.0.0.0` 暴露范围，优先反代 + 内网监听
-- 定期备份 MySQL 与 MinIO bucket
+- 定期备份 MySQL；OBS 桶开启版本控制或跨区域复制（按合规需求）
 - 生产环境可 pin 到 `amd64` / `arm64` 单架构标签，或等待发布 semver 版本标签
 
 ---

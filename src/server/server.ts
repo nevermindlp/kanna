@@ -142,6 +142,13 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
     : null
   const objectStorage = new ObjectStorageService(config)
   const attachmentService = new AttachmentService(objectStorage, config.databaseUrl)
+  if (objectStorage.enabled) {
+    try {
+      await objectStorage.verifyConnection()
+    } catch (error) {
+      console.warn("[kanna] Object storage connectivity check failed:", error)
+    }
+  }
   const realtimeHub = new RealtimeHub(config.redisUrl)
 
   const analytics = new KannaAnalyticsReporter({

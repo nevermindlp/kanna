@@ -1,6 +1,6 @@
-import { GetObjectCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
+import { GetObjectCommand, HeadBucketCommand, PutObjectCommand, S3Client } from "@aws-sdk/client-s3"
 import { randomUUID } from "node:crypto"
-import type { KannaRuntimeConfig } from "./kanna-config"
+import { resolveS3ForcePathStyle, type KannaRuntimeConfig } from "./kanna-config"
 import type { ChatAttachment } from "../shared/types"
 
 const DEFAULT_BINARY_MIME_TYPE = "application/octet-stream"
@@ -40,12 +40,22 @@ export class ObjectStorageService {
     this.client = new S3Client({
       region: config.s3.region,
       endpoint: config.s3.endpoint ?? undefined,
-      forcePathStyle: Boolean(config.s3.endpoint),
+      forcePathStyle: resolveS3ForcePathStyle(config.s3),
       credentials: {
         accessKeyId: config.s3.accessKeyId,
         secretAccessKey: config.s3.secretAccessKey,
       },
     })
+  }
+
+  async verifyConnection(): Promise<void> {
+    if (!this.client || !this.bucket) {
+      return
+    }
+
+    await this.client.send(new HeadBucketCommand({
+      Bucket: this.bucket,
+    }))
   }
 
   get enabled() {

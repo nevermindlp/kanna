@@ -13,7 +13,34 @@ export interface KannaRuntimeConfig {
     bucket: string | null
     accessKeyId: string | null
     secretAccessKey: string | null
+    /** null = auto-detect from endpoint (MinIO/local → path-style; OBS/cloud → virtual-host) */
+    forcePathStyle: boolean | null
   }
+}
+
+function parseOptionalBooleanEnv(value: string | undefined): boolean | null {
+  const raw = value?.trim().toLowerCase()
+  if (!raw) return null
+  if (raw === "1" || raw === "true" || raw === "yes") return true
+  if (raw === "0" || raw === "false" || raw === "no") return false
+  return null
+}
+
+/** Infer S3 path-style vs virtual-host addressing for custom endpoints. */
+export function resolveS3ForcePathStyle(s3: KannaRuntimeConfig["s3"]): boolean {
+  if (s3.forcePathStyle !== null) {
+    return s3.forcePathStyle
+  }
+  if (!s3.endpoint) {
+    return false
+  }
+
+  const lowered = s3.endpoint.toLowerCase()
+  return (
+    lowered.includes("localhost")
+    || lowered.includes("127.0.0.1")
+    || lowered.includes("minio")
+  )
 }
 
 export const LOCAL_USER_ID = "__local__"
@@ -54,6 +81,7 @@ export function resolveKannaRuntimeConfig(env: NodeJS.ProcessEnv = process.env):
       bucket: env.KANNA_S3_BUCKET?.trim() || null,
       accessKeyId: env.KANNA_S3_ACCESS_KEY_ID?.trim() || null,
       secretAccessKey: env.KANNA_S3_SECRET_ACCESS_KEY?.trim() || null,
+      forcePathStyle: parseOptionalBooleanEnv(env.KANNA_S3_FORCE_PATH_STYLE),
     },
   }
 }

@@ -23,7 +23,10 @@ services:
     ports:
       - "6379:6379"
 
+  # Optional local object storage for dev (production: use Huawei Cloud OBS or other S3-compatible service).
+  # Start with: docker compose -f docker-compose.multiuser.yml --profile local-dev up -d
   minio:
+    profiles: ["local-dev"]
     image: minio/minio:latest
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -37,6 +40,7 @@ services:
       - kanna_minio_data:/data
 
   minio-init:
+    profiles: ["local-dev"]
     image: minio/mc:latest
     depends_on:
       minio:
@@ -70,8 +74,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_started
-      minio-init:
-        condition: service_completed_successfully
     ports:
       - "3210:3210"
     environment:
@@ -80,11 +82,12 @@ services:
       KANNA_STORAGE: mysql
       DATABASE_URL: mysql://kanna:kanna_secret@mysql:3306/kanna
       REDIS_URL: redis://redis:6379
-      KANNA_S3_ENDPOINT: http://minio:9000
-      KANNA_S3_REGION: us-east-1
-      KANNA_S3_BUCKET: kanna
-      KANNA_S3_ACCESS_KEY_ID: kanna
-      KANNA_S3_SECRET_ACCESS_KEY: kanna_secret
+      KANNA_S3_ENDPOINT: ${KANNA_S3_ENDPOINT:-}
+      KANNA_S3_REGION: ${KANNA_S3_REGION:-cn-north-4}
+      KANNA_S3_BUCKET: ${KANNA_S3_BUCKET:-}
+      KANNA_S3_ACCESS_KEY_ID: ${KANNA_S3_ACCESS_KEY_ID:-}
+      KANNA_S3_SECRET_ACCESS_KEY: ${KANNA_S3_SECRET_ACCESS_KEY:-}
+      KANNA_S3_FORCE_PATH_STYLE: ${KANNA_S3_FORCE_PATH_STYLE:-}
       KANNA_SECRETS_KEY: dev-kanna-secrets-key-32bytes!!
       KANNA_DISABLE_SELF_UPDATE: "1"
       KANNA_TRUST_PROXY: "0"
