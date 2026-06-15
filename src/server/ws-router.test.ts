@@ -1542,6 +1542,214 @@ describe("ws-router", () => {
     })
   })
 
+  test("hiding a project removes it from rebroadcasted sidebar snapshots", async () => {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", {
+      id: "project-1",
+      localPath: "/tmp/project",
+      title: "Project",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    state.projectIdsByPath.set("/tmp/project", "project-1")
+    state.chatsById.set("chat-1", {
+      id: "chat-1",
+      projectId: "project-1",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      unread: false,
+      provider: null,
+      planMode: false,
+      sessionToken: null,
+      pendingForkSessionToken: null,
+      hasMessages: false,
+      lastTurnOutcome: null,
+    })
+
+    const router = createWsRouter({
+      store: {
+        state,
+        getProject(projectId: string) {
+          const project = state.projectsById.get(projectId)
+          if (!project || project.deletedAt) return null
+          return project
+        },
+        async removeProject(projectId: string) {
+          const project = state.projectsById.get(projectId)
+          if (!project) throw new Error("Project not found")
+          project.deletedAt = Date.now()
+          project.updatedAt = Date.now()
+          state.projectIdsByPath.delete(project.localPath)
+        },
+        getSidebarProjectOrder() {
+          return []
+        },
+      } as never,
+      agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
+      terminals: {
+        getSnapshot: () => null,
+        onEvent: () => () => {},
+      } as never,
+      keybindings: {
+        getSnapshot: () => DEFAULT_KEYBINDINGS_SNAPSHOT,
+        onChange: () => () => {},
+      } as never,
+      refreshDiscovery: async () => [],
+      getDiscoveredProjects: () => [],
+      machineDisplayName: "Local Machine",
+      updateManager: null,
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({
+        v: 1,
+        type: "subscribe",
+        id: "sidebar-sub-hide-project",
+        topic: { type: "sidebar" },
+      })
+    )
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({
+        v: 1,
+        type: "command",
+        id: "project-hide-1",
+        command: { type: "project.remove", projectId: "project-1" },
+      })
+    )
+
+    expect(ws.sent.at(-2)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "ack",
+      id: "project-hide-1",
+    })
+    expect(ws.sent.at(-1)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "snapshot",
+      id: "sidebar-sub-hide-project",
+      snapshot: {
+        type: "sidebar",
+        data: {
+          projectGroups: [],
+        },
+      },
+    })
+    expect(state.chatsById.get("chat-1")?.deletedAt).toBeUndefined()
+  })
+
+  test("archiving a chat moves it into archivedChats in the rebroadcasted sidebar snapshot", async () => {
+    const state = createEmptyState()
+    state.projectsById.set("project-1", {
+      id: "project-1",
+      localPath: "/tmp/project",
+      title: "Project",
+      createdAt: 1,
+      updatedAt: 1,
+    })
+    state.chatsById.set("chat-1", {
+      id: "chat-1",
+      projectId: "project-1",
+      title: "Chat",
+      createdAt: 1,
+      updatedAt: 1,
+      unread: false,
+      provider: null,
+      planMode: false,
+      sessionToken: null,
+      pendingForkSessionToken: null,
+      hasMessages: false,
+      lastTurnOutcome: null,
+    })
+
+    const router = createWsRouter({
+      store: {
+        state,
+        async archiveChat(chatId: string) {
+          const chat = state.chatsById.get(chatId)
+          if (!chat) throw new Error("Chat not found")
+          chat.archivedAt = Date.now()
+          chat.updatedAt = Date.now()
+        },
+        getSidebarProjectOrder() {
+          return []
+        },
+      } as never,
+      agent: { getActiveStatuses: () => new Map(), getDrainingChatIds: () => new Set() } as never,
+      terminals: {
+        getSnapshot: () => null,
+        onEvent: () => () => {},
+      } as never,
+      keybindings: {
+        getSnapshot: () => DEFAULT_KEYBINDINGS_SNAPSHOT,
+        onChange: () => () => {},
+      } as never,
+      refreshDiscovery: async () => [],
+      getDiscoveredProjects: () => [],
+      machineDisplayName: "Local Machine",
+      updateManager: null,
+    })
+    const ws = new FakeWebSocket()
+    router.handleOpen(ws as never)
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({
+        v: 1,
+        type: "subscribe",
+        id: "sidebar-sub-archive-chat",
+        topic: { type: "sidebar" },
+      })
+    )
+
+    await router.handleMessage(
+      ws as never,
+      JSON.stringify({
+        v: 1,
+        type: "command",
+        id: "chat-archive-1",
+        command: { type: "chat.archive", chatId: "chat-1" },
+      })
+    )
+
+    expect(ws.sent.at(-2)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "ack",
+      id: "chat-archive-1",
+    })
+    expect(ws.sent.at(-1)).toEqual({
+      v: PROTOCOL_VERSION,
+      type: "snapshot",
+      id: "sidebar-sub-archive-chat",
+      snapshot: {
+        type: "sidebar",
+        data: {
+          projectGroups: [withSidebarGroupDefaults({
+            groupKey: "project-1",
+            title: "Project",
+            localPath: "/tmp/project",
+            chats: [],
+            archivedChats: [{
+              _id: "chat-1",
+              _creationTime: 1,
+              chatId: "chat-1",
+              title: "Chat",
+              status: "idle",
+              unread: false,
+              localPath: "/tmp/project",
+              provider: null,
+              hasAutomation: false,
+            }],
+          })],
+        },
+      },
+    })
+  })
+
   test("forks a chat through the agent and rebroadcasts the sidebar snapshot", async () => {
     const state = createEmptyState()
     state.projectsById.set("project-1", {
