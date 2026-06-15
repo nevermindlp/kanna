@@ -79,6 +79,20 @@ export function claudeSnapshotFromProviderConfig(
   return normalizeClaudeProviderSnapshot(config ?? {}, filePathDisplay)
 }
 
+export async function readClaudeProviderSnapshotForUser(
+  service: UserSettingsService | null,
+  userId: string,
+): Promise<ClaudeProviderSnapshot | null> {
+  if (!service) return null
+  const config = await service.readProvider<{
+    apiKey?: string
+    baseUrl?: string | null
+    customModels?: string[]
+    defaultModel?: string
+  }>(userId, "claude")
+  return claudeSnapshotFromProviderConfig(config, "account settings")
+}
+
 export function llmSnapshotFromProviderConfig(
   config: (Pick<LlmProviderSnapshot, "provider" | "apiKey" | "model" | "baseUrl">) | null,
   filePathDisplay: string,

@@ -1,10 +1,11 @@
 import { beforeEach, describe, expect, test } from "bun:test"
-import { resetClaudeProviderCacheForTests } from "./claude-provider"
+import { resetClaudeProviderCacheForTests, normalizeClaudeProviderSnapshot } from "./claude-provider"
 import {
   codexServiceTierFromModelOptions,
   normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeServerModel,
+  resolveClaudeAgentModelSettings,
 } from "./provider-catalog"
 import { resolveClaudeApiModelId } from "../shared/types"
 
@@ -70,5 +71,20 @@ describe("provider catalog normalization", () => {
   test("resolves Claude API model ids for 1m context window", () => {
     expect(resolveClaudeApiModelId("claude-opus-4-7", "1m")).toBe("claude-opus-4-7[1m]")
     expect(resolveClaudeApiModelId("claude-sonnet-4-6", "200k")).toBe("claude-sonnet-4-6")
+  })
+
+  test("uses custom endpoint models instead of default Anthropic ids", () => {
+    const provider = normalizeClaudeProviderSnapshot({
+      apiKey: "test-key",
+      baseUrl: "https://glm.example.com/anthropic",
+      customModels: ["glm-5"],
+      defaultModel: "glm-5",
+    })
+
+    expect(resolveClaudeAgentModelSettings({ model: "claude-sonnet-4-6" }, provider)).toEqual({
+      model: "glm-5",
+      effort: undefined,
+      planMode: false,
+    })
   })
 })

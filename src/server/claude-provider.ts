@@ -192,6 +192,14 @@ export function buildClaudeSessionEnv(baseEnv: Record<string, string | undefined
   return buildClaudeSessionEnvFromSnapshot(cachedSnapshot, baseEnv)
 }
 
+export function claudeSessionEnvFingerprint(env: Record<string, string | undefined> | undefined) {
+  return [
+    env?.ANTHROPIC_API_KEY ?? "",
+    env?.ANTHROPIC_AUTH_TOKEN ?? "",
+    env?.ANTHROPIC_BASE_URL ?? "",
+  ].join("\0")
+}
+
 export function buildServerProviders(claudeProvider: ClaudeProviderSnapshot | null = cachedSnapshot): ProviderCatalogEntry[] {
   const codexCatalog = PROVIDERS.find((provider) => provider.id === "codex")
   const hardCodedCodexModels: ProviderModelOption[] = [
@@ -271,12 +279,12 @@ export async function validateClaudeProviderCredentials(
     }
   }
 
-  if (!snapshot.usesCustomEndpoint) {
-    return { ok: true, error: null }
-  }
-
-  const model = snapshot.defaultModel || snapshot.customModels[0]
-  const baseUrl = normalizeClaudeProviderBaseUrl(snapshot.baseUrl)
+  const model = snapshot.usesCustomEndpoint
+    ? (snapshot.defaultModel || snapshot.customModels[0])
+    : "claude-haiku-4-5-20251001"
+  const baseUrl = snapshot.usesCustomEndpoint
+    ? normalizeClaudeProviderBaseUrl(snapshot.baseUrl)
+    : "https://api.anthropic.com"
 
   try {
     const response = await fetch(`${baseUrl}/v1/messages`, {

@@ -92,6 +92,9 @@ services:
       KANNA_SECRETS_KEY: dev-kanna-secrets-key-32bytes!!
       KANNA_DISABLE_SELF_UPDATE: "1"
       KANNA_TRUST_PROXY: "0"
+      # Linux/glibc images (oven/bun): SDK defaults to musl binary which cannot spawn on glibc.
+      # Kanna auto-picks glibc; override only when using a custom Claude install path.
+      # CLAUDE_EXECUTABLE: /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude
     volumes:
       - kanna_data:/root/.kanna
       # Replace with your host projects directory for agent cwd access:

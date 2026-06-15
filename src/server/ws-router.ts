@@ -16,6 +16,7 @@ import { getActiveEventStore, tryGetActiveEventStore, tryGetActiveUserId, withUs
 import { LOCAL_USER_ID } from "./kanna-config"
 import { createUserScopedSettingsAdapters } from "./user-settings-adapters"
 import {
+  readClaudeProviderSnapshotForUser,
   UserSettingsService,
 } from "./user-settings-service"
 import { openExternal } from "./external-open"
@@ -865,6 +866,10 @@ export function createWsRouter({
       await scopedStore.ensureMessagesLoaded(topic.chatId)
     }
 
+    const claudeProvider = userSettingsService
+      ? await readClaudeProviderSnapshotForUser(userSettingsService, store.userId)
+      : null
+
     return {
       v: PROTOCOL_VERSION,
       type: "snapshot",
@@ -876,7 +881,8 @@ export function createWsRouter({
           agent.getActiveStatuses(),
           agent.getDrainingChatIds(),
           topic.chatId,
-          (chatId) => store.getRecentChatHistory(chatId, topic.recentLimit ?? DEFAULT_CHAT_RECENT_LIMIT)
+          (chatId) => store.getRecentChatHistory(chatId, topic.recentLimit ?? DEFAULT_CHAT_RECENT_LIMIT),
+          claudeProvider,
         ),
       },
     }

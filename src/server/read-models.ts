@@ -10,6 +10,7 @@ import type {
 } from "../shared/types"
 import type { ChatRecord, StoreState } from "./events"
 import { resolveLocalPath } from "./paths"
+import type { ClaudeProviderSnapshot } from "../shared/types"
 import { buildServerProviders, getCachedClaudeProviderSnapshot } from "./claude-provider"
 
 const SIDEBAR_RECENT_WINDOW_MS = 24 * 60 * 60 * 1_000
@@ -185,7 +186,8 @@ export function deriveChatSnapshot(
   activeStatuses: Map<string, KannaStatus>,
   drainingChatIds: Set<string>,
   chatId: string,
-  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "history">
+  getMessages: (chatId: string) => Pick<ChatSnapshot, "messages" | "history">,
+  claudeProvider: ClaudeProviderSnapshot | null = getCachedClaudeProviderSnapshot(),
 ): ChatSnapshot | null {
   const chat = state.chatsById.get(chatId)
   if (!chat || chat.deletedAt) return null
@@ -214,6 +216,6 @@ export function deriveChatSnapshot(
     })),
     messages: transcript.messages,
     history: transcript.history,
-    availableProviders: buildServerProviders(getCachedClaudeProviderSnapshot()),
+    availableProviders: buildServerProviders(claudeProvider),
   }
 }

@@ -5,6 +5,7 @@ import { getDataRootDir } from "../shared/branding"
 import type { LlmProviderSnapshot } from "../shared/types"
 import { CodexAppServerManager } from "./codex-app-server"
 import { readLlmProviderSnapshot } from "./llm-provider"
+import { resolveClaudeCodeExecutable } from "./claude-executable"
 import { buildClaudeSessionEnv } from "./claude-provider"
 
 const CLAUDE_STRUCTURED_TIMEOUT_MS = 5_000
@@ -109,6 +110,7 @@ export async function runClaudeStructured(args: Omit<StructuredQuickResponseArgs
         schema: args.schema,
       },
       env: buildClaudeSessionEnv(process.env),
+      pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(process.env),
     },
   })
 

@@ -1,8 +1,8 @@
 import { query, type CanUseTool, type PermissionResult, type Query, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk"
-import { homedir } from "node:os"
 import type {
   AgentProvider,
   ChatAttachment,
+  ClaudeProviderSnapshot,
   ContextWindowUsageSnapshot,
   ModelOptions,
   NormalizedToolCall,
@@ -23,12 +23,17 @@ import type { HarnessEvent, HarnessToolRequest, HarnessTurn } from "./harness-ty
 import {
   codexServiceTierFromModelOptions,
   getServerProviderCatalog,
-  normalizeClaudeModelOptions,
   normalizeCodexModelOptions,
   normalizeServerModel,
+  resolveClaudeAgentModelSettings,
 } from "./provider-catalog"
-import { resolveClaudeApiModelId } from "../shared/types"
-import { buildClaudeSessionEnv, isCustomClaudeModel } from "./claude-provider"
+import {
+  buildClaudeSessionEnv,
+  claudeSessionEnvFingerprint,
+  getCachedClaudeProviderSnapshot,
+} from "./claude-provider"
+import { resolveClaudeCodeExecutable } from "./claude-executable"
+import { assertProjectDirectoryExists } from "./paths"
 import { fallbackTitleFromMessage } from "./generate-title"
 import type { AttachmentService } from "./attachment-service"
 
@@ -96,6 +101,7 @@ interface ClaudeSessionState {
   effort?: string
   planMode: boolean
   sessionToken: string | null
+  sessionEnvKey: string
   accountInfoLoaded: boolean
   nextPromptSeq: number
   pendingPromptSeqs: number[]
@@ -120,6 +126,7 @@ interface AgentCoordinatorArgs {
     sessionEnv?: Record<string, string | undefined>
   }) => Promise<ClaudeSessionHandle>
   resolveClaudeSessionEnv?: (userId: string) => Promise<Record<string, string | undefined>>
+  resolveClaudeProviderSnapshot?: (userId: string) => Promise<ClaudeProviderSnapshot | null>
   attachmentService?: AttachmentService | null
 }
 
@@ -638,7 +645,7 @@ async function startClaudeSession(args: {
       canUseTool,
       tools: [...CLAUDE_TOOLSET],
       settingSources: ["user", "project", "local"],
-      pathToClaudeCodeExecutable: process.env.CLAUDE_EXECUTABLE?.replace(/^~(?=\/|$)/, homedir()) || undefined,
+      pathToClaudeCodeExecutable: resolveClaudeCodeExecutable(process.env),
       env: args.sessionEnv ?? buildClaudeSessionEnv(process.env),
     },
   })
@@ -689,6 +696,7 @@ export class AgentCoordinator {
   private readonly generateTitle: (messageContent: string, cwd: string) => Promise<GenerateChatTitleResult>
   private readonly startClaudeSessionFn: NonNullable<AgentCoordinatorArgs["startClaudeSession"]>
   private readonly resolveClaudeSessionEnv?: AgentCoordinatorArgs["resolveClaudeSessionEnv"]
+  private readonly resolveClaudeProviderSnapshot?: AgentCoordinatorArgs["resolveClaudeProviderSnapshot"]
   private readonly attachmentService?: AttachmentService | null
   private reportBackgroundError: ((message: string) => void) | null = null
   readonly activeTurns = new Map<string, ActiveTurn>()
@@ -705,6 +713,7 @@ export class AgentCoordinator {
     this.generateTitle = args.generateTitle ?? generateTitleForChatDetailed
     this.startClaudeSessionFn = args.startClaudeSession ?? startClaudeSession
     this.resolveClaudeSessionEnv = args.resolveClaudeSessionEnv
+    this.resolveClaudeProviderSnapshot = args.resolveClaudeProviderSnapshot
     this.attachmentService = args.attachmentService ?? null
   }
 
@@ -784,20 +793,22 @@ export class AgentCoordinator {
     return options.provider ?? "claude"
   }
 
-  private getProviderSettings(provider: AgentProvider, options: SendMessageOptions) {
-    const catalog = getServerProviderCatalog(provider)
+  private async resolveProviderSettings(provider: AgentProvider, options: SendMessageOptions) {
     if (provider === "claude") {
-      const model = normalizeServerModel(provider, options.model)
-      const isCustomModel = isCustomClaudeModel(model)
-      const modelOptions = normalizeClaudeModelOptions(model, options.modelOptions, options.effort)
+      const userId = this.store.userId
+      const claudeProvider = this.resolveClaudeProviderSnapshot
+        ? await this.resolveClaudeProviderSnapshot(userId)
+        : getCachedClaudeProviderSnapshot()
+      const settings = resolveClaudeAgentModelSettings(options, claudeProvider)
       return {
-        model: isCustomModel ? model : resolveClaudeApiModelId(model, modelOptions.contextWindow),
-        effort: isCustomModel ? undefined : modelOptions.reasoningEffort,
+        model: settings.model,
+        effort: settings.effort,
         serviceTier: undefined,
-        planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
+        planMode: settings.planMode,
       }
     }
 
+    const catalog = getServerProviderCatalog(provider)
     const modelOptions = normalizeCodexModelOptions(options.modelOptions, options.effort)
     return {
       model: normalizeServerModel(provider, options.model),
@@ -824,7 +835,7 @@ export class AgentCoordinator {
     await this.store.removeQueuedMessage(chatId, queuedMessage.id)
     const chat = this.store.requireChat(chatId)
     const provider = this.resolveProvider(queuedMessage, chat.provider)
-    const settings = this.getProviderSettings(provider, queuedMessage)
+    const settings = await this.resolveProviderSettings(provider, queuedMessage)
     await this.startTurnForChat({
       chatId,
       provider,
@@ -1106,16 +1117,25 @@ export class AgentCoordinator {
   }): Promise<HarnessTurn> {
     let session = this.claudeSessions.get(args.chatId)
 
-    if (!session || session.localPath !== args.localPath || session.effort !== args.effort || args.forkSession) {
+    let sessionEnv: Record<string, string | undefined> | undefined
+    if (this.resolveClaudeSessionEnv) {
+      sessionEnv = await this.resolveClaudeSessionEnv(this.chatUserIds.get(args.chatId) ?? this.store.userId)
+    }
+    const sessionEnvKey = claudeSessionEnvFingerprint(sessionEnv)
+
+    if (
+      !session
+      || session.localPath !== args.localPath
+      || session.effort !== args.effort
+      || session.sessionEnvKey !== sessionEnvKey
+      || args.forkSession
+    ) {
       if (session) {
         session.session.close()
         this.claudeSessions.delete(args.chatId)
       }
 
-      let sessionEnv: Record<string, string | undefined> | undefined
-      if (this.resolveClaudeSessionEnv) {
-        sessionEnv = await this.resolveClaudeSessionEnv(this.chatUserIds.get(args.chatId) ?? this.store.userId)
-      }
+      await assertProjectDirectoryExists(args.localPath)
 
       const started = await this.startClaudeSessionFn({
         localPath: args.localPath,
@@ -1137,6 +1157,7 @@ export class AgentCoordinator {
         effort: args.effort,
         planMode: args.planMode,
         sessionToken: args.sessionToken,
+        sessionEnvKey,
         accountInfoLoaded: false,
         nextPromptSeq: 0,
         pendingPromptSeqs: [],
@@ -1203,7 +1224,7 @@ export class AgentCoordinator {
     }
 
     const provider = this.resolveProvider(command, chat.provider)
-    const settings = this.getProviderSettings(provider, command)
+    const settings = await this.resolveProviderSettings(provider, command)
     this.analytics.track("message_sent")
     await this.startTurnForChat({
       chatId,

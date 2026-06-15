@@ -1,6 +1,7 @@
 import type {
   AgentProvider,
   ClaudeModelOptions,
+  ClaudeProviderSnapshot,
   CodexModelOptions,
   ClaudeContextWindow,
   ModelOptions,
@@ -14,6 +15,7 @@ import {
   normalizeProviderModelId,
   isClaudeReasoningEffort,
   isCodexReasoningEffort,
+  resolveClaudeApiModelId,
 } from "../shared/types"
 import { buildServerProviders, getCachedClaudeProviderSnapshot, isCustomClaudeModel } from "./claude-provider"
 
@@ -79,4 +81,33 @@ export function normalizeCodexModelOptions(modelOptions?: ModelOptions, legacyEf
 
 export function codexServiceTierFromModelOptions(modelOptions: CodexModelOptions): ServiceTier | undefined {
   return modelOptions.fastMode ? "fast" : undefined
+}
+
+export function resolveClaudeAgentModelSettings(
+  options: { model?: string; modelOptions?: ModelOptions; effort?: string; planMode?: boolean },
+  claudeProvider: ClaudeProviderSnapshot | null = getCachedClaudeProviderSnapshot(),
+) {
+  const providers = buildServerProviders(claudeProvider)
+  const catalog = getServerProviderCatalog("claude", providers)
+
+  if (claudeProvider?.usesCustomEndpoint && claudeProvider.customModels.length > 0) {
+    const trimmed = typeof options.model === "string" ? options.model.trim() : ""
+    const model = trimmed && claudeProvider.customModels.includes(trimmed)
+      ? trimmed
+      : (claudeProvider.defaultModel || claudeProvider.customModels[0])
+    return {
+      model,
+      effort: undefined as string | undefined,
+      planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
+    }
+  }
+
+  const model = normalizeServerModel("claude", options.model, providers)
+  const isCustomModel = isCustomClaudeModel(model, claudeProvider)
+  const modelOptions = normalizeClaudeModelOptions(model, options.modelOptions, options.effort)
+  return {
+    model: isCustomModel ? model : resolveClaudeApiModelId(model, modelOptions.contextWindow),
+    effort: isCustomModel ? undefined : modelOptions.reasoningEffort,
+    planMode: catalog.supportsPlanMode ? Boolean(options.planMode) : false,
+  }
 }

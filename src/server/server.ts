@@ -12,7 +12,7 @@ import { StoreResolver } from "./store-resolver"
 import { RealtimeHub } from "./realtime-hub"
 import { ObjectStorageService } from "./object-storage"
 import { AttachmentService, inferAttachmentResponseContentType } from "./attachment-service"
-import { UserSettingsService } from "./user-settings-service"
+import { claudeSnapshotFromProviderConfig, readClaudeProviderSnapshotForUser, UserSettingsService } from "./user-settings-service"
 import type { IUserScopedEventStore } from "./event-store-types"
 import { AgentCoordinator } from "./agent"
 import { KannaAnalyticsReporter } from "./analytics"
@@ -22,7 +22,6 @@ import { discoverProjects, type DiscoveredProject } from "./discovery"
 import { KeybindingsManager } from "./keybindings"
 import { readLlmProviderSnapshot, validateLlmProviderCredentials, writeLlmProviderSnapshot } from "./llm-provider"
 import { buildClaudeSessionEnvFromSnapshot, readClaudeProviderSnapshot, validateClaudeProviderCredentials, writeClaudeProviderSnapshot } from "./claude-provider"
-import { claudeSnapshotFromProviderConfig } from "./user-settings-service"
 import { getMachineDisplayName } from "./machine-name"
 import { TerminalManager } from "./terminal-manager"
 import { UpdateManager } from "./update-manager"
@@ -179,6 +178,9 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
         const snapshot = claudeSnapshotFromProviderConfig(config, "account settings")
         return buildClaudeSessionEnvFromSnapshot(snapshot, process.env)
       }
+      : undefined,
+    resolveClaudeProviderSnapshot: userSettingsService
+      ? (userId) => readClaudeProviderSnapshotForUser(userSettingsService, userId)
       : undefined,
     analytics,
     onStateChange: (chatId?: string, options?: { immediate?: boolean }) => {
