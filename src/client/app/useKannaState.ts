@@ -3,6 +3,7 @@ import { useNavigate } from "react-router-dom"
 import { useShallow } from "zustand/react/shallow"
 import { PROVIDERS, type AgentProvider, type AppSettingsPatch, type AppSettingsSnapshot, type AskUserQuestionAnswerMap, type ChatAttachment, type ChatDiffSnapshot, type ChatHistoryPage, type ClaudeProviderSnapshot, type ClaudeProviderValidationResult, type KeybindingsSnapshot, type LlmProviderSnapshot, type LlmProviderValidationResult, type ModelOptions, type ProviderCatalogEntry, type QueuedChatMessage, type StandaloneTranscriptExportCommandResult, type TranscriptEntry, type UpdateInstallResult, type UpdateSnapshot, type UserPromptEntry } from "../../shared/types"
 import { NEW_CHAT_COMPOSER_ID, type ComposerState, useChatPreferencesStore } from "../stores/chatPreferencesStore"
+import { resetFilesViewForNewChat } from "../stores/filesStore"
 import { useRightSidebarStore } from "../stores/rightSidebarStore"
 import { useTerminalLayoutStore } from "../stores/terminalLayoutStore"
 import { getEditorPresetLabel, useTerminalPreferencesStore } from "../stores/terminalPreferencesStore"
@@ -1413,6 +1414,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
   }, [activeChatId, hasOlderHistory, historyCursor, isHistoryLoading, socket])
 
   const createChatForProject = useCallback(async (projectId: string) => {
+    resetFilesViewForNewChat()
     const chatPreferences = useChatPreferencesStore.getState()
     const sourceComposerState = activeChatId
       ? chatPreferences.getComposerState(activeChatId)

@@ -28,6 +28,7 @@ import { UpdateManager } from "./update-manager"
 import type { UpdateInstallAttemptResult } from "./cli-runtime"
 import { createWsRouter, type ClientState } from "./ws-router"
 import { deleteProjectUpload, inferAttachmentContentType, inferProjectFileContentType, persistProjectUpload } from "./uploads"
+import { handleProjectFilesRequest } from "./project-files"
 import { getProjectUploadDir } from "./paths"
 
 const MAX_UPLOAD_FILES = 50
@@ -353,6 +354,15 @@ export async function startKannaServer(options: StartKannaServerOptions = {}) {
             return projectFileContentResponse
           }
 
+          const projectFilesResponse = await handleProjectFilesRequest(req, url, scopedStore)
+          if (projectFilesResponse) {
+            return projectFilesResponse
+          }
+
+          if (url.pathname.startsWith("/api/")) {
+            return Response.json({ error: "Not found" }, { status: 404 })
+          }
+
           return serveStatic(distDir, url.pathname)
         },
         websocket: {
@@ -614,7 +624,7 @@ async function handleAttachmentContent(req: Request, url: URL, store: IUserScope
 }
 
 async function handleProjectFileContent(req: Request, url: URL, store: IUserScopedEventStore) {
-  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/files\/([^/]+)\/content$/)
+  const match = url.pathname.match(/^\/api\/projects\/([^/]+)\/files\/(.+)\/content$/)
   if (!match) {
     return null
   }

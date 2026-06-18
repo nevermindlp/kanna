@@ -380,6 +380,18 @@ export interface ProjectSummary {
   updatedAt: number
 }
 
+export interface ProjectFileTreeNode {
+  name: string
+  path: string
+  type: "file" | "directory"
+  size?: number
+  modified?: string | null
+  permissions?: string
+  permissionsRwx?: string
+  isSymlink?: boolean
+  children?: ProjectFileTreeNode[]
+}
+
 export interface SidebarChatRow {
   _id: string
   _creationTime: number

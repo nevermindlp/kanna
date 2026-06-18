@@ -1,10 +1,9 @@
-import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react"
+import { lazy, memo, Suspense, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type ComponentProps, type CSSProperties, type DragEvent, type ReactNode, type RefObject } from "react"
 import { type LegendListRef } from "@legendapp/list/react"
 import type { GroupImperativeHandle } from "react-resizable-panels"
 import { useOutletContext } from "react-router-dom"
 import type { ChatInputHandle } from "../../components/chat-ui/ChatInput"
 import { ChatNavbar } from "../../components/chat-ui/ChatNavbar"
-import { BrowserPanel } from "../../components/chat-ui/BrowserPanel"
 import { GitPanel } from "../../components/chat-ui/GitPanel"
 import { useAppDialog } from "../../components/ui/app-dialog"
 import { Card, CardContent } from "../../components/ui/card"
@@ -12,6 +11,14 @@ import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "../../comp
 import { actionMatchesEvent, getResolvedKeybindings } from "../../lib/keybindings"
 import { deriveLatestContextWindowSnapshot } from "../../lib/contextWindow"
 import { cn } from "../../lib/utils"
+import { useFilesStore } from "../../stores/filesStore"
+import { useDeploymentMode } from "../../lib/useDeploymentMode"
+import { useTheme } from "../../hooks/useTheme"
+
+const FilesWorkspace = lazy(async () => {
+  const module = await import("../../components/files/FilesWorkspace")
+  return { default: module.FilesWorkspace }
+})
 import {
   DEFAULT_RIGHT_SIDEBAR_SIZE,
   DEFAULT_RIGHT_SIDEBAR_VISIBILITY_STATE,
@@ -468,6 +475,7 @@ function ChatWorkspace({
 
 export function ChatPage() {
   const state = useOutletContext<KannaState>()
+  const isCloudDeployment = useDeploymentMode()
   const dialog = useAppDialog()
   const layoutRootRef = useRef<HTMLDivElement>(null)
   const transcriptListRef = useRef<LegendListRef | null>(null)
@@ -481,6 +489,11 @@ export function ChatPage() {
   const [pendingTerminalCommands, setPendingTerminalCommands] = useState<Record<string, string>>({})
   const showEmptyState = state.messages.length === 0 && state.runtime?.title === "New Chat"
   const projectId = state.activeProjectId
+  const mainView = useFilesStore((store) => store.mainView)
+  const setMainView = useFilesStore((store) => store.setMainView)
+  const { resolvedTheme } = useTheme()
+  const showFilesWorkspace = mainView === "files" && Boolean(projectId)
+  const projectRootPath = state.navbarLocalPath ?? state.runtime?.localPath ?? ""
   const projectTerminalLayout = useTerminalLayoutStore((store) => (projectId ? store.projects[projectId] : undefined))
   const terminalLayout = projectTerminalLayout ?? DEFAULT_PROJECT_TERMINAL_LAYOUT
   const projectRightSidebarVisibility = useRightSidebarStore((store) => (projectId ? store.projects[projectId] : undefined))
@@ -515,8 +528,8 @@ export function ChatPage() {
   const showTerminalPane = Boolean(projectId && terminalLayout.isVisible && hasTerminals)
   const shouldRenderTerminalLayout = Boolean(projectId && hasTerminals)
   const activeRightPanel = projectId ? rightSidebarVisibility.rightPanel : "hidden"
-  const showRightSidebar = Boolean(projectId && activeRightPanel !== "hidden")
-  const showGitPanel = Boolean(projectId && activeRightPanel === "git")
+  const showRightSidebar = Boolean(projectId && activeRightPanel === "git")
+  const showGitPanel = showRightSidebar
   const shouldRenderRightSidebarLayout = Boolean(projectId)
   const isMobileRightSidebarOverlay = useMobileRightSidebarOverlayEnabled()
   const shouldRenderDesktopRightSidebarLayout = shouldRenderRightSidebarLayout && !isMobileRightSidebarOverlay
@@ -680,19 +693,12 @@ export function ChatPage() {
     toggleRightPanel(projectId, "git")
   }, [activeRightPanel, dialog, handleInitializeGit, hideRightPanel, projectId, state.chatDiffSnapshot?.status, toggleRightPanel])
 
-  const handleToggleBrowserPanel = useCallback(() => {
+  useEffect(() => {
     if (!projectId) return
-    toggleRightPanel(projectId, "browser")
-  }, [projectId, toggleRightPanel])
-
-  const handleRunQuickAction = useCallback((command: string) => {
-    if (!projectId) return
-    const terminalId = addTerminal(projectId)
-    setPendingTerminalCommands((current) => ({
-      ...current,
-      [terminalId]: command,
-    }))
-  }, [addTerminal, projectId])
+    if (rightSidebarVisibility.rightPanel === "browser") {
+      hideRightPanel(projectId)
+    }
+  }, [hideRightPanel, projectId, rightSidebarVisibility.rightPanel])
 
   const handleInitialTerminalCommandSent = useCallback((terminalId: string) => {
     setPendingTerminalCommands((current) => {
@@ -924,14 +930,10 @@ export function ChatPage() {
           localPath={state.navbarLocalPath}
           embeddedTerminalVisible={showTerminalPane}
           onToggleEmbeddedTerminal={projectId ? handleToggleEmbeddedTerminal : undefined}
-          rightPanel={activeRightPanel}
+          rightPanel={activeRightPanel === "git" ? "git" : "hidden"}
           onToggleGitPanel={projectId ? handleToggleGitPanel : undefined}
-          onToggleBrowserPanel={projectId ? handleToggleBrowserPanel : undefined}
-          onOpenExternal={handleOpenExternal}
-          onExportTranscript={state.activeChatId ? () => void state.handleShareChat(state.activeChatId) : undefined}
-          canExportTranscript={Boolean(state.activeChatId) && !state.isExportingStandalone}
-          isExportingTranscript={state.isExportingStandalone}
-          exportTranscriptComplete={state.standaloneShareComplete}
+          onOpenExternal={isCloudDeployment ? undefined : handleOpenExternal}
+          hideExternalOpen={isCloudDeployment}
           editorPreset={editorPreset}
           editorCommandTemplate={editorCommandTemplate}
           platform={state.localProjects?.machine.platform}
@@ -942,7 +944,16 @@ export function ChatPage() {
           branchName={state.chatDiffSnapshot?.branchName}
           hasGitRepo={state.chatDiffSnapshot?.status !== "no_repo"}
           gitStatus={state.chatDiffSnapshot?.status}
+          mainView={mainView}
+          onSetMainView={setMainView}
+          filesTabEnabled={Boolean(projectId)}
         />
+        {showFilesWorkspace && projectId && projectRootPath ? (
+          <Suspense fallback={<div className="flex flex-1 items-center justify-center text-sm text-muted-foreground">Loading files…</div>}>
+            <FilesWorkspace projectId={projectId} projectRootPath={projectRootPath} isDark={resolvedTheme === "dark"} />
+          </Suspense>
+        ) : (
+          <>
         <ChatTranscriptViewport
           activeChatId={state.activeChatId}
           listRef={transcriptListRef}
@@ -975,8 +986,11 @@ export function ChatPage() {
           isPageFileDragActive={isPageFileDragActive}
           showEmptyState={showEmptyState}
         />
+          </>
+        )}
       </CardContent>
 
+      {!showFilesWorkspace ? (
       <ChatInputDock
         inputRef={inputRef}
         onLayoutChange={syncInputHeight}
@@ -994,6 +1008,7 @@ export function ChatPage() {
         onSubmit={handleChatSubmit}
         onCancel={handleCancel}
       />
+      ) : null}
     </Card>
   )
 
@@ -1091,11 +1106,9 @@ export function ChatPage() {
     state.editorLabel,
     wrapDiffLines,
   ])
-  const rightPanelContent = activeRightPanel === "browser" && projectId
-    ? <BrowserPanel projectId={projectId} socket={state.socket} onClose={handleCloseRightSidebar} onRunQuickAction={handleRunQuickAction} />
-    : gitPanelContentProps
-      ? <ChatSidebarContent {...gitPanelContentProps} />
-      : null
+  const rightPanelContent = gitPanelContentProps
+    ? <ChatSidebarContent {...gitPanelContentProps} />
+    : null
 
   return (
     <div ref={layoutRootRef} className="flex-1 flex flex-col min-w-0 relative">
