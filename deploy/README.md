@@ -134,6 +134,44 @@ docker compose -f docker-compose.multiuser.yml --profile app up -d --build
 
 ---
 
+## 华为云 SWR（生产 arm64）
+
+生产服务器为 **linux/arm64** 时，使用时间戳标签构建并推送到 SWR：
+
+```bash
+# 默认：linux/arm64 + 时间戳标签（如 20260622-163045）
+./scripts/build-swr-image.sh
+
+# 或指定版本名
+./scripts/build-swr-image.sh 20260622-163045
+
+# Linux 服务器上若需 sudo
+USE_SUDO=1 ./scripts/build-swr-image.sh
+```
+
+等价手动步骤：
+
+```bash
+VERSION=$(date +%Y%m%d-%H%M%S)
+sudo docker buildx build --platform linux/arm64 --provenance=false -t kanna:${VERSION} --load .
+sudo docker tag kanna:${VERSION} swr.cn-north-4.myhuaweicloud.com/ptzx-devops/kanna:${VERSION}
+sudo docker push swr.cn-north-4.myhuaweicloud.com/ptzx-devops/kanna:${VERSION}
+```
+
+生产 compose：
+
+```bash
+export KANNA_IMAGE=swr.cn-north-4.myhuaweicloud.com/ptzx-devops/kanna:20260622-163045
+docker compose -f docker-compose.multiuser.yml --profile app up -d --no-build
+```
+
+| 环境 | 推荐镜像 |
+|------|----------|
+| 本地 Mac 开发 | `hilpdocker/kanna:local`（本机 `docker build`） |
+| 生产 arm64 | `swr.cn-north-4.myhuaweicloud.com/ptzx-devops/kanna:{时间戳}` |
+
+---
+
 ## 常用运维
 
 ```bash

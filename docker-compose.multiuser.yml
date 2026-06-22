@@ -97,9 +97,9 @@ services:
       KANNA_PROJECT_ROOT: /projects
       # Use pipe I/O in Docker: Bun.Terminal PTY reads fail in long-lived Linux servers.
       KANNA_TERMINAL_IO: pipe
-      # Linux/glibc images (oven/bun): SDK defaults to musl binary which cannot spawn on glibc.
-      # Kanna auto-picks glibc; override only when using a custom Claude install path.
-      # CLAUDE_EXECUTABLE: /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude
+      # Claude Code: leave CLAUDE_EXECUTABLE unset to auto-pick linux-${arch} from node_modules.
+      # arm64 example (only if you need an explicit override):
+      # CLAUDE_EXECUTABLE: /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-arm64/claude
     volumes:
       - kanna_data:/root/.kanna
       # Replace with your host projects directory for agent cwd access:

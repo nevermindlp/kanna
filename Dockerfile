@@ -15,14 +15,14 @@ FROM oven/bun:1.3.5 AS runtime
 
 WORKDIR /app
 
-# Runtime tools: embedded terminal shell, Git panel, and OpenSpec CLI.
+# Runtime tools: embedded terminal shell, Git panel, OpenSpec CLI, and npm for project workflows.
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
     git \
   && rm -rf /var/lib/apt/lists/* \
-  && bun install -g --trust @fission-ai/openspec@1.4.1
+  && bun install -g --trust @fission-ai/openspec@1.4.1 npm
 
 ENV NODE_ENV=production
 # Prevent startup from trying to globally install a newer npm package inside the container.

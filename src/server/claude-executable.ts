@@ -14,7 +14,9 @@ const require = createRequire(import.meta.url)
  */
 export function resolveClaudeCodeExecutable(env: Record<string, string | undefined> = process.env): string | undefined {
   const override = env.CLAUDE_EXECUTABLE?.trim().replace(/^~(?=\/|$)/, homedir())
-  if (override) return override
+  if (override && isExecutableFile(override)) {
+    return override
+  }
 
   if (process.platform !== "linux") return undefined
 
@@ -30,6 +32,15 @@ export function resolveClaudeCodeExecutable(env: Record<string, string | undefin
   }
 
   return undefined
+}
+
+function isExecutableFile(filePath: string): boolean {
+  try {
+    accessSync(filePath, constants.X_OK)
+    return true
+  } catch {
+    return false
+  }
 }
 
 function resolveBundledClaudeBinary(packageName: string): string | null {
