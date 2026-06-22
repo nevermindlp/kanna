@@ -6,6 +6,7 @@ import {
   sanitizeNextPath,
   SESSION_COOKIE_NAME,
 } from "./auth-shared"
+import { resolveUpdatesEnabled } from "../shared/branding"
 import type { AuthContext, AuthManager, AuthManagerOptions, AuthStatusPayload } from "./user-auth"
 
 export type { AuthContext, AuthManager, AuthManagerOptions, AuthStatusPayload }
@@ -89,6 +90,7 @@ export function createAuthManager(password: string, options: AuthManagerOptions 
       enabled: true,
       authenticated: Boolean(context),
       mode: "single",
+      updatesEnabled: resolveUpdatesEnabled(),
     } satisfies AuthStatusPayload)
   }
 
@@ -152,6 +154,7 @@ export function createDisabledAuthManager(): AuthManager {
       enabled: false,
       authenticated: true,
       mode: "single",
+      updatesEnabled: resolveUpdatesEnabled(),
     } satisfies AuthStatusPayload),
     resolveAuthContextAsync: async () => ({
       userId: "__local__",

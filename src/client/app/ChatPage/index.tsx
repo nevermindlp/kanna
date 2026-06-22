@@ -272,6 +272,7 @@ interface ChatWorkspaceProps {
   connectionStatus: KannaState["connectionStatus"]
   scrollback: number
   minColumnWidth: number
+  directoryAccessible?: boolean
   splitTerminalShortcut?: string[]
   pendingCommandsByTerminalId?: Record<string, string>
   onTerminalCommandSent?: () => void
@@ -402,6 +403,7 @@ function ChatWorkspace({
   connectionStatus,
   scrollback,
   minColumnWidth,
+  directoryAccessible = true,
   splitTerminalShortcut,
   pendingCommandsByTerminalId,
   onTerminalCommandSent,
@@ -459,6 +461,7 @@ function ChatWorkspace({
             connectionStatus={connectionStatus}
             scrollback={scrollback}
             minColumnWidth={minColumnWidth}
+            directoryAccessible={directoryAccessible}
             splitTerminalShortcut={splitTerminalShortcut}
             pendingCommandsByTerminalId={pendingCommandsByTerminalId}
             focusRequestVersion={terminalFocusRequestVersion}
@@ -1029,6 +1032,7 @@ export function ChatPage() {
       connectionStatus={state.connectionStatus}
       scrollback={scrollback}
       minColumnWidth={minColumnWidth}
+      directoryAccessible={state.runtime?.directoryAccessible ?? true}
       splitTerminalShortcut={resolvedKeybindings.bindings.addSplitTerminal}
       pendingCommandsByTerminalId={pendingTerminalCommands}
       onTerminalCommandSent={scheduleTerminalDiffRefresh}

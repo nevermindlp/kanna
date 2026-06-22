@@ -639,6 +639,7 @@ export interface KannaState {
   sidebarData: SidebarData
   localProjects: LocalProjectsSnapshot | null
   updateSnapshot: UpdateSnapshot | null
+  updatesEnabled: boolean
   chatSnapshot: ChatSnapshot | null
   chatDiffSnapshot: ChatDiffSnapshot | null
   keybindings: KeybindingsSnapshot | null
@@ -728,7 +729,7 @@ export interface KannaState {
   handleCopyStandaloneShareLink: () => Promise<boolean>
 }
 
-export function useKannaState(activeChatId: string | null): KannaState {
+export function useKannaState(activeChatId: string | null, updatesEnabled = true): KannaState {
   const navigate = useNavigate()
   const socket = useKannaSocket()
   const dialog = useAppDialog()
@@ -826,20 +827,23 @@ export function useKannaState(activeChatId: string | null): KannaState {
   }, [socket])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     return socket.subscribe<UpdateSnapshot>({ type: "update" }, (snapshot) => {
       setUpdateSnapshot(snapshot)
       setCommandError(null)
     })
-  }, [socket])
+  }, [socket, updatesEnabled])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     if (connectionStatus !== "connected") return
     void socket.command<UpdateSnapshot>({ type: "update.check", force: true }).catch((error) => {
       setCommandError(error instanceof Error ? error.message : String(error))
     })
-  }, [connectionStatus, socket])
+  }, [connectionStatus, socket, updatesEnabled])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     const reloadRequestedAt = updateSnapshot?.reloadRequestedAt
     if (!shouldHandleUiUpdateReloadRequest(reloadRequestedAt, getLastHandledUiUpdateReloadRequest())) {
       return
@@ -850,18 +854,20 @@ export function useKannaState(activeChatId: string | null): KannaState {
 
     setLastHandledUiUpdateReloadRequest(reloadRequestedAt)
     setUiUpdateRestartPhase("awaiting_disconnect")
-  }, [updateSnapshot?.reloadRequestedAt])
+  }, [updateSnapshot?.reloadRequestedAt, updatesEnabled])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     const phase = getUiUpdateRestartPhase()
     const reconnectAction = getUiUpdateRestartReconnectAction(phase, connectionStatus)
     if (reconnectAction === "awaiting_server_ready") {
       setUiUpdateRestartPhase("awaiting_server_ready")
       return
     }
-  }, [connectionStatus])
+  }, [connectionStatus, updatesEnabled])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     if (getUiUpdateRestartPhase() !== "awaiting_server_ready") {
       return
     }
@@ -895,9 +901,10 @@ export function useKannaState(activeChatId: string | null): KannaState {
         window.clearTimeout(timeoutId)
       }
     }
-  }, [connectionStatus])
+  }, [connectionStatus, updatesEnabled])
 
   useEffect(() => {
+    if (!updatesEnabled) return
     function handleWindowFocus() {
       if (!updateSnapshot?.lastCheckedAt) return
       if (Date.now() - updateSnapshot.lastCheckedAt <= 60 * 60 * 1000) return
@@ -910,7 +917,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     return () => {
       window.removeEventListener("focus", handleWindowFocus)
     }
-  }, [socket, updateSnapshot?.lastCheckedAt])
+  }, [socket, updateSnapshot?.lastCheckedAt, updatesEnabled])
 
   useEffect(() => {
     return socket.subscribe<KeybindingsSnapshot>({ type: "keybindings" }, (snapshot) => {
@@ -1498,15 +1505,17 @@ export function useKannaState(activeChatId: string | null): KannaState {
   }, [startChatFromIntent])
 
   const handleCheckForUpdates = useCallback(async (options?: { force?: boolean }) => {
+    if (!updatesEnabled) return
     try {
       await socket.command<UpdateSnapshot>({ type: "update.check", force: options?.force })
       setCommandError(null)
     } catch (error) {
       setCommandError(error instanceof Error ? error.message : String(error))
     }
-  }, [socket])
+  }, [socket, updatesEnabled])
 
   const handleInstallUpdate = useCallback(async () => {
+    if (!updatesEnabled) return
     try {
       const result = await socket.command<UpdateInstallResult>({ type: "update.install" })
       if (!result.ok) {
@@ -1533,7 +1542,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
       clearUiUpdateRestartPhase()
       setCommandError(error instanceof Error ? error.message : String(error))
     }
-  }, [dialog, socket])
+  }, [dialog, socket, updatesEnabled])
 
   const handleSignOut = useCallback(async () => {
     try {
@@ -2070,6 +2079,7 @@ export function useKannaState(activeChatId: string | null): KannaState {
     sidebarData: resolvedSidebarData,
     localProjects,
     updateSnapshot,
+    updatesEnabled,
     chatSnapshot,
     chatDiffSnapshot,
     keybindings,

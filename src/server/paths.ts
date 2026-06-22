@@ -1,3 +1,4 @@
+import { statSync } from "node:fs"
 import { mkdir, stat } from "node:fs/promises"
 import { homedir } from "node:os"
 import path from "node:path"
@@ -23,6 +24,15 @@ export async function ensureProjectDirectory(localPath: string) {
   const info = await stat(resolvedPath)
   if (!info.isDirectory()) {
     throw new Error("Project path must be a directory")
+  }
+}
+
+export function isProjectDirectoryAccessible(localPath: string) {
+  const resolvedPath = resolveLocalPath(localPath)
+  try {
+    return statSync(resolvedPath).isDirectory()
+  } catch {
+    return false
   }
 }
 

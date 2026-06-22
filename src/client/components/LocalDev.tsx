@@ -130,10 +130,12 @@ function Step({
 function ProjectCard({
   localPath,
   loading,
+  directoryAccessible = true,
   onClick,
 }: {
   localPath: string
   loading: boolean
+  directoryAccessible?: boolean
   onClick: () => void
 }) {
   return (
@@ -142,7 +144,8 @@ function ProjectCard({
         <button
           className={cn(
             "border border-border hover:border-primary/30 group rounded-lg bg-card px-4 py-3 flex items-center gap-3 w-full text-left hover:bg-muted/50 transition-colors",
-            loading && "opacity-50 cursor-not-allowed"
+            loading && "opacity-50 cursor-not-allowed",
+            !directoryAccessible && "border-destructive/30 opacity-70"
           )}
           disabled={loading}
           onClick={onClick}
@@ -151,6 +154,9 @@ function ProjectCard({
           <span className="font-medium text-foreground truncate flex-1">
             {getPathBasename(localPath)}
           </span>
+          {!directoryAccessible ? (
+            <span className="text-[10px] uppercase tracking-wide text-destructive flex-shrink-0">Missing</span>
+          ) : null}
           {loading ? (
             <Loader2 className="h-4 w-4 text-muted-foreground group-hover:text-primary animate-spin flex-shrink-0" />
           ) : (
@@ -160,6 +166,7 @@ function ProjectCard({
       </TooltipTrigger>
       <TooltipContent>
         <p>{localPath}</p>
+        {!directoryAccessible ? <p className="text-destructive">Directory is not available on this machine.</p> : null}
       </TooltipContent>
     </Tooltip>
   )
@@ -281,6 +288,7 @@ export function LocalDev({
                   <ProjectCard
                     key={project.localPath}
                     localPath={project.localPath}
+                    directoryAccessible={project.directoryAccessible}
                     loading={startingLocalPath === project.localPath}
                     onClick={() => {
                       void onOpenProject(project.localPath)
@@ -307,6 +315,7 @@ export function LocalDev({
       <NewProjectModal
         open={newProjectOpen}
         onOpenChange={onNewProjectOpenChange}
+        defaultProjectRoot={snapshot?.defaultNewProjectRoot}
         onConfirm={(project) => {
           void onCreateProject(project)
         }}

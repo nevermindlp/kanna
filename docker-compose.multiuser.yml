@@ -91,7 +91,12 @@ services:
       KANNA_S3_FORCE_PATH_STYLE: ${KANNA_S3_FORCE_PATH_STYLE:-}
       KANNA_SECRETS_KEY: dev-kanna-secrets-key-32bytes!!
       KANNA_DISABLE_SELF_UPDATE: "1"
+      KANNA_DISABLE_UPDATES: "1"
       KANNA_TRUST_PROXY: "0"
+      # New projects are created under /projects (bind-mounted to host KANNA_PROJECTS_DIR).
+      KANNA_PROJECT_ROOT: /projects
+      # Use pipe I/O in Docker: Bun.Terminal PTY reads fail in long-lived Linux servers.
+      KANNA_TERMINAL_IO: pipe
       # Linux/glibc images (oven/bun): SDK defaults to musl binary which cannot spawn on glibc.
       # Kanna auto-picks glibc; override only when using a custom Claude install path.
       # CLAUDE_EXECUTABLE: /app/node_modules/@anthropic-ai/claude-agent-sdk-linux-x64/claude

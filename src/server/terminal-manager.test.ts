@@ -2,7 +2,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, test } from "bun:test
 import { mkdtemp, mkdir, rm } from "node:fs/promises"
 import os from "node:os"
 import path from "node:path"
-import { TerminalManager } from "./terminal-manager"
+import { TerminalManager, normalizePipeTerminalOutputForXterm } from "./terminal-manager"
 
 const SHELL_START_TIMEOUT_MS = 5_000
 const COMMAND_TIMEOUT_MS = 5_000
@@ -98,7 +98,12 @@ async function waitForOutputToContain(getOutput: () => string, value: string, ti
 }
 
 describeIfSupported("TerminalManager", () => {
-  test("ctrl+c interrupts the foreground job and keeps the shell alive", async () => {
+  test("normalizePipeTerminalOutputForXterm converts LF-only breaks to CRLF", () => {
+    expect(normalizePipeTerminalOutputForXterm("hello\nworld")).toBe("hello\r\nworld")
+    expect(normalizePipeTerminalOutputForXterm("already\r\nok\n")).toBe("already\r\nok\r\n")
+  })
+
+  test("pipe io mode streams shell output", async () => {
     const terminalId = "terminal-ctrl-c-foreground"
     const { manager, getOutput } = await createSession(terminalId)
 

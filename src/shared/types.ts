@@ -429,6 +429,7 @@ export interface LocalProjectSummary {
   source: "saved" | "discovered"
   lastOpenedAt?: number
   chatCount: number
+  directoryAccessible: boolean
 }
 
 export interface LocalProjectsSnapshot {
@@ -437,6 +438,7 @@ export interface LocalProjectsSnapshot {
     displayName: string
     platform: NodeJS.Platform
   }
+  defaultNewProjectRoot: string
   projects: LocalProjectSummary[]
 }
 
@@ -1081,6 +1083,7 @@ export interface ChatRuntime {
   chatId: string
   projectId: string
   localPath: string
+  directoryAccessible: boolean
   title: string
   status: KannaStatus
   isDraining: boolean

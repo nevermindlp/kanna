@@ -12,6 +12,7 @@ interface TerminalWorkspaceShellProps {
   connectionStatus: KannaState["connectionStatus"]
   scrollback: number
   minColumnWidth: number
+  directoryAccessible?: boolean
   splitTerminalShortcut?: string[]
   focusRequestVersion: number
   pendingCommandsByTerminalId?: Record<string, string>
@@ -30,6 +31,7 @@ export const TerminalWorkspaceShell = memo(function TerminalWorkspaceShell({
   connectionStatus,
   scrollback,
   minColumnWidth,
+  directoryAccessible = true,
   splitTerminalShortcut,
   focusRequestVersion,
   pendingCommandsByTerminalId,
@@ -48,6 +50,7 @@ export const TerminalWorkspaceShell = memo(function TerminalWorkspaceShell({
         connectionStatus={connectionStatus}
         scrollback={scrollback}
         minColumnWidth={minColumnWidth}
+        directoryAccessible={directoryAccessible}
         splitTerminalShortcut={splitTerminalShortcut}
         focusRequestVersion={focusRequestVersion}
         pendingCommandsByTerminalId={pendingCommandsByTerminalId}

@@ -192,8 +192,10 @@ describe("read models", () => {
         source: "saved",
         lastOpenedAt: 100,
         chatCount: 1,
+        directoryAccessible: expect.any(Boolean),
       },
     ])
+    expect(snapshot.defaultNewProjectRoot).toBe("~/Kanna")
   })
 
   test("orders sidebar chats by user-visible activity instead of internal updatedAt churn", () => {

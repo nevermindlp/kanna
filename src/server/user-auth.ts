@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto"
 import { and, eq, gt } from "drizzle-orm"
 import type { KannaDatabase } from "./db/client"
 import { sessions, users } from "./db/schema"
+import { resolveUpdatesEnabled } from "../shared/branding"
 import {
   buildCookie,
   effectiveOrigin,
@@ -20,6 +21,7 @@ export interface AuthStatusPayload {
   mode: "single" | "multiuser"
   username?: string
   userId?: string
+  updatesEnabled: boolean
 }
 
 export interface AuthContext {
@@ -199,6 +201,7 @@ export function createMySqlUserAuthManager(
       mode: "multiuser",
       username: context?.username,
       userId: context?.userId,
+      updatesEnabled: resolveUpdatesEnabled(),
     } satisfies AuthStatusPayload)
   }
 

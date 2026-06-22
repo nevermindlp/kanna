@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { getMacOptionInputSequence, getTerminalOptions } from "./TerminalPane"
+import { getMacOptionInputSequence, getTerminalOptions, getTerminalSnapshotStructureKey, shouldResetTerminalFromSnapshot } from "./TerminalPane"
 
 describe("getTerminalOptions", () => {
   test("treats Option as Meta on macOS", () => {
@@ -8,6 +8,7 @@ describe("getTerminalOptions", () => {
     expect(options.macOptionIsMeta).toBe(true)
     expect(options.scrollback).toBe(1_000)
     expect(options.lineHeight).toBe(1)
+    expect(options.convertEol).toBe(true)
   })
 
   test("does not enable macOS Option behavior on non-mac platforms", () => {
@@ -90,5 +91,24 @@ describe("getMacOptionInputSequence", () => {
       ctrlKey: true,
       metaKey: false,
     }, "MacIntel")).toBeNull()
+  })
+})
+
+describe("terminal snapshot hydration", () => {
+  test("skips reset when only serialized output changed", () => {
+    const base = {
+      cwd: "/projects/demo",
+      shell: "/bin/bash",
+      cols: 80,
+      rows: 24,
+      scrollback: 1000,
+      status: "running" as const,
+      exitCode: null,
+    }
+    const previousKey = getTerminalSnapshotStructureKey(base)
+
+    expect(shouldResetTerminalFromSnapshot(previousKey, base)).toBe(false)
+    expect(shouldResetTerminalFromSnapshot(previousKey, { ...base, status: "exited" })).toBe(true)
+    expect(shouldResetTerminalFromSnapshot(null, base)).toBe(true)
   })
 })

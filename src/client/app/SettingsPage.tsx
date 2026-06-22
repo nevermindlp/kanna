@@ -110,8 +110,21 @@ const sidebarItems = [
 type SidebarItem = (typeof sidebarItems)[number]
 type SidebarPageId = SidebarItem["id"]
 
-export function resolveSettingsSectionId(sectionId: string | undefined): SidebarPageId | null {
+export function getSettingsSidebarItems(updatesEnabled = true): readonly SidebarItem[] {
+  if (updatesEnabled) {
+    return sidebarItems
+  }
+  return sidebarItems.filter((item) => item.id !== "changelog")
+}
+
+export function resolveSettingsSectionId(
+  sectionId: string | undefined,
+  options?: { updatesEnabled?: boolean },
+): SidebarPageId | null {
   if (!sectionId) return null
+  if (options?.updatesEnabled === false && sectionId === "changelog") {
+    return null
+  }
   return sidebarItems.some((item) => item.id === sectionId) ? (sectionId as SidebarPageId) : null
 }
 
@@ -822,7 +835,9 @@ export function SettingsPage() {
   const [authUsername, setAuthUsername] = useState<string | null>(null)
   const [releases, setReleases] = useState<GithubRelease[]>([])
   const [changelogError, setChangelogError] = useState<string | null>(null)
-  const selectedPage = resolveSettingsSectionId(sectionId) ?? "general"
+  const updatesEnabled = state.updatesEnabled
+  const visibleSidebarItems = useMemo(() => getSettingsSidebarItems(updatesEnabled), [updatesEnabled])
+  const selectedPage = resolveSettingsSectionId(sectionId, { updatesEnabled }) ?? "general"
   const isConnecting = state.connectionStatus === "connecting" || !state.localProjectsReady
   const machineName = state.localProjects?.machine.displayName ?? "Unavailable"
   const projectCount = state.localProjects?.projects.length ?? 0
@@ -985,6 +1000,12 @@ export function SettingsPage() {
   }, [handleReadClaudeProvider, handleReadLlmProvider, isConnecting, selectedPage])
 
   useEffect(() => {
+    if (updatesEnabled || sectionId !== "changelog") return
+    navigate("/settings/general", { replace: true })
+  }, [navigate, sectionId, updatesEnabled])
+
+  useEffect(() => {
+    if (!updatesEnabled) return
     if (selectedPage !== "changelog" || isConnecting) return
 
     let cancelled = false
@@ -1006,7 +1027,7 @@ export function SettingsPage() {
     return () => {
       cancelled = true
     }
-  }, [isConnecting, selectedPage])
+  }, [isConnecting, selectedPage, updatesEnabled])
 
   function commitScrollback() {
     const nextValue = Number(scrollbackDraft)
@@ -1249,7 +1270,7 @@ export function SettingsPage() {
     .replaceAll("{column}", "1")
   const analyticsDisclosureEvents = ANALYTICS_STATIC_EVENT_NAMES
   const analyticsSettingValue = appSettings?.analyticsEnabled === false ? "disabled" : "enabled"
-  const selectedSection = sidebarItems.find((item) => item.id === selectedPage) ?? sidebarItems[0]
+  const selectedSection = visibleSidebarItems.find((item) => item.id === selectedPage) ?? visibleSidebarItems[0]
   const selectedSectionSubtitle =
     selectedPage === "keybindings"
       ? getKeybindingsSubtitle(keybindingsFilePathDisplay)
@@ -1312,7 +1333,7 @@ export function SettingsPage() {
             <div className="px-3 pb-5 text-[22px] font-extrabold tracking-[-0.5px] text-foreground">
               Settings
             </div>
-            {sidebarItems.map((item) => (
+            {visibleSidebarItems.map((item) => (
               <button
                 key={item.label}
                 type="button"
@@ -1369,7 +1390,7 @@ export function SettingsPage() {
                   <Menu className="h-4 w-4 shrink-0" />
                 </button>
                 </div>
-                {sidebarItems.map((item) => (
+                {visibleSidebarItems.map((item) => (
                   <button
                     key={item.label}
                     type="button"
@@ -1421,7 +1442,7 @@ export function SettingsPage() {
                     <div className="text-lg font-semibold tracking-[-0.2px] text-foreground">
                       {selectedSection.label}
                     </div>
-                    {selectedPage === "general" ? (
+                    {selectedPage === "general" && updatesEnabled ? (
                       <SettingsHeaderButton
                         variant="outline"
                         onClick={() => navigate("/settings/changelog")}
@@ -1452,35 +1473,39 @@ export function SettingsPage() {
                         {appSettingsError}
                       </div>
                     ) : null}
-                    <div className="border-b border-border">
-                      <SettingsRow
-                        title="Application Update"
-                        description={(
-                          <>
-                            <span>{updateStatusLabel}.</span>
-                            {updateSnapshot?.lastCheckedAt ? (
-                              <span> Last checked {new Intl.DateTimeFormat(undefined, {
-                                month: "short",
-                                day: "numeric",
-                                hour: "numeric",
-                                minute: "2-digit",
-                              }).format(updateSnapshot.lastCheckedAt)}.</span>
-                            ) : null}
-                            {updateSnapshot?.error ? (
-                              <span> {updateSnapshot.error}</span>
-                            ) : null}
-                          </>
-                        )}
-                        bordered={false}
-                      >
-                        <div className="text-right text-sm text-foreground">
-                          <div>Current: {updateSnapshot?.currentVersion ?? appVersion}</div>
-                          <div className="text-xs text-muted-foreground">
-                            Latest: {updateSnapshot?.latestVersion ?? "Unknown"}
+                    {updatesEnabled ? (
+                      <div className="border-b border-border">
+                        <SettingsRow
+                          title="Application Update"
+                          description={(
+                            <>
+                              <span>{updateStatusLabel}.</span>
+                              {updateSnapshot?.lastCheckedAt ? (
+                                <span> Last checked {new Intl.DateTimeFormat(undefined, {
+                                  month: "short",
+                                  day: "numeric",
+                                  hour: "numeric",
+                                  minute: "2-digit",
+                                }).format(updateSnapshot.lastCheckedAt)}.</span>
+                              ) : null}
+                              {updateSnapshot?.error ? (
+                                <span> {updateSnapshot.error}</span>
+                              ) : null}
+                            </>
+                          )}
+                          bordered={false}
+                        >
+                          <div className="text-right text-sm text-foreground">
+                            <div>Current: {updateSnapshot?.currentVersion ?? appVersion}</div>
+                            <div className="text-xs text-muted-foreground">
+                              Latest: {updateSnapshot?.latestVersion ?? "Unknown"}
+                            </div>
                           </div>
-                        </div>
-                      </SettingsRow>
+                        </SettingsRow>
+                      </div>
+                    ) : null}
 
+                    <div className="border-b border-border">
                       <SettingsRow
                         title="Theme"
                         description="Choose between light, dark, or system appearance"

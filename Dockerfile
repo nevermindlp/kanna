@@ -15,9 +15,24 @@ FROM oven/bun:1.3.5 AS runtime
 
 WORKDIR /app
 
+# Runtime tools: embedded terminal shell, Git panel, and OpenSpec CLI.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends \
+    bash \
+    ca-certificates \
+    git \
+  && rm -rf /var/lib/apt/lists/* \
+  && bun install -g --trust @fission-ai/openspec@1.4.1
+
 ENV NODE_ENV=production
 # Prevent startup from trying to globally install a newer npm package inside the container.
 ENV KANNA_DISABLE_SELF_UPDATE=1
+ENV KANNA_DISABLE_UPDATES=1
+ENV KANNA_PROJECT_ROOT=/projects
+ENV SHELL=/bin/bash
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
+ENV PATH="/root/.bun/bin:/usr/local/bin:${PATH}"
 
 # Required at runtime: version lookup (cli.ts) and branding imports.
 COPY package.json bun.lock ./

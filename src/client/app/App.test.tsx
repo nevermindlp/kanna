@@ -26,6 +26,11 @@ describe("shouldRedirectToChangelog", () => {
     expect(shouldRedirectToChangelog("/chat/1", "0.12.0", "0.11.0")).toBe(false)
     expect(shouldRedirectToChangelog("/", "0.12.0", "0.12.0")).toBe(false)
   })
+
+  test("does not redirect when updates are disabled", () => {
+    expect(shouldRedirectToChangelog("/", "0.12.0", null, false)).toBe(false)
+    expect(shouldRedirectToChangelog("/", "0.12.0", "0.11.0", false)).toBe(false)
+  })
 })
 
 describe("clampSidebarWidth", () => {

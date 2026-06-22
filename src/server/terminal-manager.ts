@@ -33,11 +33,21 @@ interface TerminalSession {
   status: "running" | "exited"
   exitCode: number | null
   process: Bun.Subprocess | null
-  terminal: Bun.Terminal
+  terminal: Bun.Terminal | null
+  ioMode: "pty" | "pipe"
+  suppressPipeStartupNoise: boolean
   headless: Terminal
   serializeAddon: SerializeAddon
   focusReportingEnabled: boolean
   modeSequenceTail: string
+}
+
+export function shouldUsePipeTerminalIo(env: NodeJS.ProcessEnv = process.env) {
+  const raw = env.KANNA_TERMINAL_IO?.trim().toLowerCase()
+  if (raw === "pipe") return true
+  if (raw === "pty") return false
+  // Bun.Terminal PTY reads are unreliable in long-lived Linux server processes (e.g. Docker).
+  return env.KANNA_RUNTIME_PROFILE === "prod" && process.platform === "linux"
 }
 
 function clampScrollback(value: number) {
@@ -50,26 +60,46 @@ function normalizeTerminalDimension(value: number, fallback: number) {
   return Math.max(1, Math.round(value))
 }
 
-function resolveShell() {
-  try {
-    return detectDefaultShell()
-  } catch {
-    if (defaultShell) return defaultShell
-    if (process.platform === "win32") {
-      return process.env.ComSpec || "cmd.exe"
-    }
-    return process.env.SHELL || "/bin/sh"
+function isValidShellPath(value: string | undefined | null): value is string {
+  if (!value || value.trim() === "" || value === "unknown") {
+    return false
   }
+  if (process.platform === "win32") {
+    return true
+  }
+  return value.includes("/")
 }
 
-function resolveShellArgs(shellPath: string) {
+function resolveShell() {
+  try {
+    const detected = detectDefaultShell()
+    if (isValidShellPath(detected)) {
+      return detected
+    }
+  } catch {
+    // Fall through to env/default shell resolution.
+  }
+
+  if (isValidShellPath(defaultShell)) {
+    return defaultShell
+  }
+  if (isValidShellPath(process.env.SHELL)) {
+    return process.env.SHELL
+  }
+  if (process.platform === "win32") {
+    return process.env.ComSpec || "cmd.exe"
+  }
+  return "/bin/bash"
+}
+
+function resolveShellArgs(shellPath: string, pipeIo = false) {
   if (process.platform === "win32") {
     return []
   }
 
   const shellName = path.basename(shellPath)
   if (["bash", "zsh", "fish", "sh", "ksh"].includes(shellName)) {
-    return ["-l"]
+    return pipeIo ? ["-i"] : ["-l"]
   }
 
   return []
@@ -100,6 +130,27 @@ function filterFocusReportInput(data: string, allowFocusReporting: boolean) {
   }
 
   return data.replaceAll(FOCUS_IN_SEQUENCE, "").replaceAll(FOCUS_OUT_SEQUENCE, "")
+}
+
+/** Pipe-mode shells emit LF-only newlines; xterm needs CR+LF or each line starts where the last ended. */
+export function normalizePipeTerminalOutputForXterm(data: string) {
+  return data.replace(/(?<!\r)\n/g, "\r\n")
+}
+
+function filterPipeStartupNoise(data: string, session: TerminalSession) {
+  if (session.ioMode !== "pipe" || session.suppressPipeStartupNoise) {
+    return data
+  }
+
+  const cleaned = data
+    .replace(/bash: cannot set terminal process group \([^)]*\): Inappropriate ioctl for device\r?\n/g, "")
+    .replace(/bash: no job control in this shell\r?\n/g, "")
+
+  if (cleaned !== data) {
+    session.suppressPipeStartupNoise = true
+  }
+
+  return cleaned
 }
 
 function killTerminalProcessTree(subprocess: Bun.Subprocess | null) {
@@ -162,7 +213,8 @@ export class TerminalManager {
     if (process.platform === "win32") {
       throw new Error("Embedded terminal is currently supported on macOS/Linux only.")
     }
-    if (typeof Bun.Terminal !== "function") {
+    const pipeIo = shouldUsePipeTerminalIo()
+    if (!pipeIo && typeof Bun.Terminal !== "function") {
       throw new Error("Embedded terminal requires Bun 1.3.5+ with Bun.Terminal support.")
     }
 
@@ -173,7 +225,7 @@ export class TerminalManager {
       existing.rows = normalizeTerminalDimension(args.rows, existing.rows)
       existing.headless.options.scrollback = existing.scrollback
       existing.headless.resize(existing.cols, existing.rows)
-      existing.terminal.resize(existing.cols, existing.rows)
+      existing.terminal?.resize(existing.cols, existing.rows)
       signalTerminalProcessGroup(existing.process, "SIGWINCH")
       return this.snapshotOf(existing)
     }
@@ -198,21 +250,9 @@ export class TerminalManager {
       status: "running",
       exitCode: null,
       process: null,
-      terminal: new Bun.Terminal({
-        cols,
-        rows,
-        name: "xterm-256color",
-        data: (_terminal, data) => {
-          const chunk = Buffer.from(data).toString("utf8")
-          updateFocusReportingState(session, chunk)
-          headless.write(chunk)
-          this.emit({
-            type: "terminal.output",
-            terminalId: args.terminalId,
-            data: chunk,
-          })
-        },
-      }),
+      terminal: null,
+      ioMode: pipeIo ? "pipe" : "pty",
+      suppressPipeStartupNoise: false,
       headless,
       serializeAddon,
       focusReportingEnabled: false,
@@ -220,13 +260,34 @@ export class TerminalManager {
     }
 
     try {
-      session.process = Bun.spawn([shell, ...resolveShellArgs(shell)], {
-        cwd: args.projectPath,
-        env: createTerminalEnv(),
-        terminal: session.terminal,
-      })
+      if (pipeIo) {
+        session.process = Bun.spawn([shell, ...resolveShellArgs(shell, true)], {
+          cwd: args.projectPath,
+          env: createTerminalEnv(),
+          stdin: "pipe",
+          stdout: "pipe",
+          stderr: "pipe",
+        })
+        this.pumpSessionStream(session, args.terminalId, session.process.stdout)
+        this.pumpSessionStream(session, args.terminalId, session.process.stderr)
+      } else {
+        session.terminal = new Bun.Terminal({
+          cols,
+          rows,
+          name: "xterm-256color",
+          data: (_terminal, data) => {
+            const chunk = Buffer.from(data).toString("utf8")
+            this.handleSessionOutput(session, args.terminalId, chunk)
+          },
+        })
+        session.process = Bun.spawn([shell, ...resolveShellArgs(shell, false)], {
+          cwd: args.projectPath,
+          env: createTerminalEnv(),
+          terminal: session.terminal,
+        })
+      }
     } catch (error) {
-      session.terminal.close()
+      session.terminal?.close()
       session.serializeAddon.dispose()
       session.headless.dispose()
       throw error
@@ -269,7 +330,12 @@ export class TerminalManager {
 
   write(terminalId: string, data: string) {
     const session = this.sessions.get(terminalId)
-    if (!session || session.status === "exited") return
+    if (!session) {
+      throw new Error(`Terminal session not found: ${terminalId}`)
+    }
+    if (session.status === "exited") {
+      throw new Error(`Terminal session has exited: ${terminalId}`)
+    }
 
     const filteredData = filterFocusReportInput(data, session.focusReportingEnabled)
     if (!filteredData) return
@@ -280,12 +346,20 @@ export class TerminalManager {
       const ctrlCIndex = filteredData.indexOf("\x03", cursor)
 
       if (ctrlCIndex === -1) {
-        session.terminal.write(filteredData.slice(cursor))
+        if (session.ioMode === "pipe") {
+          session.process?.stdin?.write(filteredData.slice(cursor))
+        } else {
+          session.terminal?.write(filteredData.slice(cursor))
+        }
         return
       }
 
       if (ctrlCIndex > cursor) {
-        session.terminal.write(filteredData.slice(cursor, ctrlCIndex))
+        if (session.ioMode === "pipe") {
+          session.process?.stdin?.write(filteredData.slice(cursor, ctrlCIndex))
+        } else {
+          session.terminal?.write(filteredData.slice(cursor, ctrlCIndex))
+        }
       }
 
       signalTerminalProcessGroup(session.process, "SIGINT")
@@ -299,7 +373,7 @@ export class TerminalManager {
     session.cols = normalizeTerminalDimension(cols, session.cols)
     session.rows = normalizeTerminalDimension(rows, session.rows)
     session.headless.resize(session.cols, session.rows)
-    session.terminal.resize(session.cols, session.rows)
+    session.terminal?.resize(session.cols, session.rows)
     signalTerminalProcessGroup(session.process, "SIGWINCH")
   }
 
@@ -309,7 +383,7 @@ export class TerminalManager {
 
     this.sessions.delete(terminalId)
     killTerminalProcessTree(session.process)
-    session.terminal.close()
+    session.terminal?.close()
     session.serializeAddon.dispose()
     session.headless.dispose()
   }
@@ -337,6 +411,40 @@ export class TerminalManager {
       }
     }
     return pids
+  }
+
+  private handleSessionOutput(session: TerminalSession, terminalId: string, chunk: string) {
+    let normalized = filterPipeStartupNoise(chunk, session)
+    if (session.ioMode === "pipe") {
+      normalized = normalizePipeTerminalOutputForXterm(normalized)
+    }
+    updateFocusReportingState(session, normalized)
+    session.headless.write(normalized)
+    this.emit({
+      type: "terminal.output",
+      terminalId,
+      data: normalized,
+    })
+  }
+
+  private pumpSessionStream(session: TerminalSession, terminalId: string, stream: ReadableStream<Uint8Array> | undefined | null) {
+    if (!stream) return
+
+    const reader = stream.getReader()
+    void (async () => {
+      try {
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          if (!value?.byteLength) continue
+          this.handleSessionOutput(session, terminalId, Buffer.from(value).toString("utf8"))
+        }
+      } catch {
+        // Ignore stream read errors during shutdown.
+      } finally {
+        reader.releaseLock()
+      }
+    })()
   }
 
   private snapshotOf(session: TerminalSession): TerminalSnapshot {

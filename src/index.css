@@ -273,6 +273,10 @@
     margin-bottom: 20px;
   }
 
+  .kanna-terminal {
+    height: 100%;
+  }
+
   .kanna-terminal,
   .kanna-terminal .xterm,
   .kanna-terminal .xterm-scrollable-element,

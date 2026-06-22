@@ -15,6 +15,7 @@ interface Props {
   connectionStatus: SocketStatus
   scrollback: number
   minColumnWidth: number
+  directoryAccessible?: boolean
   focusRequestVersion?: number
   pendingCommandsByTerminalId?: Record<string, string>
   splitTerminalShortcut?: string[]
@@ -35,6 +36,7 @@ interface TerminalWorkspacePaneProps {
   socket: KannaSocket
   scrollback: number
   connectionStatus: SocketStatus
+  directoryAccessible?: boolean
   clearVersion: number
   focusRequestVersion: number
   initialCommand?: string
@@ -58,6 +60,7 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
   socket,
   scrollback,
   connectionStatus,
+  directoryAccessible = true,
   clearVersion,
   focusRequestVersion,
   initialCommand,
@@ -153,6 +156,7 @@ const TerminalWorkspacePane = memo(function TerminalWorkspacePane({
             socket={socket}
             scrollback={scrollback}
             connectionStatus={connectionStatus}
+            directoryAccessible={directoryAccessible}
             clearVersion={clearVersion}
             focusRequestVersion={focusRequestVersion}
             initialCommand={initialCommand}
@@ -174,6 +178,7 @@ function TerminalWorkspaceImpl({
   connectionStatus,
   scrollback,
   minColumnWidth,
+  directoryAccessible = true,
   focusRequestVersion = 0,
   pendingCommandsByTerminalId,
   splitTerminalShortcut,
@@ -287,6 +292,7 @@ function TerminalWorkspaceImpl({
                 socket={socket}
                 scrollback={scrollback}
                 connectionStatus={connectionStatus}
+                directoryAccessible={directoryAccessible}
                 clearVersion={clearVersionsByTerminalId[terminalPane.id] ?? 0}
                 focusRequestVersion={index === 0 ? focusRequestVersion : 0}
                 initialCommand={pendingCommandsByTerminalId?.[terminalPane.id]}

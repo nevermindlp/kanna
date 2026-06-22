@@ -14,6 +14,7 @@ import { SegmentedControl } from "./ui/segmented-control"
 interface Props {
   open: boolean
   onOpenChange: (open: boolean) => void
+  defaultProjectRoot?: string
   onConfirm: (project: { mode: Tab; localPath: string; title: string }) => void
 }
 
@@ -28,7 +29,7 @@ function toKebab(str: string): string {
     .replace(/^-|-$/g, "")
 }
 
-export function NewProjectModal({ open, onOpenChange, onConfirm }: Props) {
+export function NewProjectModal({ open, onOpenChange, defaultProjectRoot = DEFAULT_NEW_PROJECT_ROOT, onConfirm }: Props) {
   const [tab, setTab] = useState<Tab>("new")
   const [name, setName] = useState("")
   const [existingPath, setExistingPath] = useState("")
@@ -54,7 +55,7 @@ export function NewProjectModal({ open, onOpenChange, onConfirm }: Props) {
   }, [tab, open])
 
   const kebab = toKebab(name)
-  const newPath = kebab ? `${DEFAULT_NEW_PROJECT_ROOT}/${kebab}` : ""
+  const newPath = kebab ? `${defaultProjectRoot}/${kebab}` : ""
   const trimmedExisting = existingPath.trim()
 
   const canSubmit = tab === "new" ? !!kebab : !!trimmedExisting

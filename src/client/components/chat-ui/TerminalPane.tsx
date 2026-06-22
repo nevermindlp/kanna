@@ -12,6 +12,7 @@ interface Props {
   socket: KannaSocket
   scrollback: number
   connectionStatus: SocketStatus
+  directoryAccessible?: boolean
   clearVersion?: number
   focusRequestVersion?: number
   initialCommand?: string
@@ -153,7 +154,7 @@ export function getTerminalOptions(scrollback: number, theme: ITheme, platform =
     cursorStyle: "bar",
     cursorWidth: 1,
     lineHeight: 1,
-    convertEol: false,
+    convertEol: true,
     allowTransparency: true,
     fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
     fontSize: 13,
@@ -210,6 +211,33 @@ export function getMacOptionInputSequence(event: MacOptionKeyEvent, platform = g
   }
 }
 
+export function getTerminalSnapshotStructureKey(snapshot: Pick<TerminalSnapshot, "cwd" | "shell" | "cols" | "rows" | "scrollback" | "status" | "exitCode">) {
+  return JSON.stringify({
+    cwd: snapshot.cwd,
+    shell: snapshot.shell,
+    cols: snapshot.cols,
+    rows: snapshot.rows,
+    scrollback: snapshot.scrollback,
+    status: snapshot.status,
+    exitCode: snapshot.exitCode,
+  })
+}
+
+export function shouldResetTerminalFromSnapshot(
+  previousStructureKey: string | null,
+  snapshot: Pick<TerminalSnapshot, "cwd" | "shell" | "cols" | "rows" | "scrollback" | "status" | "exitCode">,
+) {
+  if (!previousStructureKey) return true
+  if (snapshot.status === "exited") return true
+  return getTerminalSnapshotStructureKey(snapshot) !== previousStructureKey
+}
+
+function focusTerminalInstance(terminal: Terminal) {
+  requestAnimationFrame(() => {
+    terminal.focus()
+  })
+}
+
 function syncTerminalSize(
   terminal: Terminal,
   container: HTMLElement,
@@ -235,6 +263,7 @@ export function TerminalPane({
   socket,
   scrollback,
   connectionStatus,
+  directoryAccessible = true,
   clearVersion = 0,
   focusRequestVersion = 0,
   initialCommand,
@@ -250,12 +279,18 @@ export function TerminalPane({
   const hasCreatedRef = useRef(false)
   const createAttemptRef = useRef(0)
   const lastAppliedSnapshotKeyRef = useRef<string | null>(null)
+  const lastAppliedStructureKeyRef = useRef<string | null>(null)
   const sentInitialCommandRef = useRef<string | null>(null)
   const lastSizeRef = useRef<{ cols: number; rows: number } | null>(null)
+  const [sessionReady, setSessionReady] = useState(false)
   const [metadata, setMetadata] = useState<Pick<TerminalSnapshot, "cwd" | "shell" | "status" | "exitCode"> | null>(null)
   const [error, setError] = useState<string | null>(null)
   const terminalTheme = resolvedTheme === "dark" ? TERMINAL_THEME_DARK : TERMINAL_THEME_LIGHT
   const sendInput = (data: string) => {
+    if (!hasCreatedRef.current) {
+      setError("Terminal session is not ready yet.")
+      return
+    }
     void socket.command({
       type: "terminal.input",
       terminalId,
@@ -296,6 +331,12 @@ export function TerminalPane({
   useEffect(() => {
     sentInitialCommandRef.current = null
   }, [initialCommand])
+
+  useEffect(() => {
+    const terminal = terminalRef.current
+    if (!terminal) return
+    terminal.options.disableStdin = !sessionReady
+  }, [sessionReady])
 
   useEffect(() => {
     const terminal = new Terminal(getTerminalOptions(scrollback, terminalTheme))
@@ -400,8 +441,10 @@ export function TerminalPane({
     if (!terminal) return
 
     hasCreatedRef.current = false
+    setSessionReady(false)
     createAttemptRef.current += 1
     lastAppliedSnapshotKeyRef.current = null
+    lastAppliedStructureKeyRef.current = null
     replayStateRef.current = null
     setMetadata(null)
     setError(null)
@@ -420,7 +463,7 @@ export function TerminalPane({
   }, [metadata?.cwd, onPathChange])
 
   useEffect(() => {
-    const applySnapshot = (snapshot: TerminalSnapshot) => {
+    const applySnapshot = (snapshot: TerminalSnapshot, options: { forceReset?: boolean } = {}) => {
       const terminal = terminalRef.current
       if (!terminal) return false
       const nextMetadata = {
@@ -439,14 +482,19 @@ export function TerminalPane({
         exitCode: snapshot.exitCode,
         serializedState: snapshot.serializedState,
       })
-      if (lastAppliedSnapshotKeyRef.current === snapshotKey) {
-        setMetadata((current) => sameTerminalMetadata(current, nextMetadata) ? current : nextMetadata)
-        replayStateRef.current = snapshot.serializedState || null
-        return false
-      }
-      lastAppliedSnapshotKeyRef.current = snapshotKey
+      const structureKey = getTerminalSnapshotStructureKey(snapshot)
+      const shouldReset = options.forceReset
+        || shouldResetTerminalFromSnapshot(lastAppliedStructureKeyRef.current, snapshot)
+
       setMetadata((current) => sameTerminalMetadata(current, nextMetadata) ? current : nextMetadata)
       replayStateRef.current = snapshot.serializedState || null
+      lastAppliedSnapshotKeyRef.current = snapshotKey
+      lastAppliedStructureKeyRef.current = structureKey
+
+      if (!shouldReset) {
+        return false
+      }
+
       terminal.options.scrollback = snapshot.scrollback
       terminal.reset()
       if (snapshot.serializedState) {
@@ -460,6 +508,12 @@ export function TerminalPane({
       const terminal = terminalRef.current
       const element = containerRef.current
       if (!terminal || !element) return
+      if (!directoryAccessible) {
+        setSessionReady(false)
+        hasCreatedRef.current = false
+        setError("Project directory is not available on this machine. Re-open or recreate the project.")
+        return
+      }
       const size = getMeasuredTerminalSize(terminal, element) ?? getTerminalSize(terminal)
       terminal.resize(size.cols, size.rows)
       lastSizeRef.current = size
@@ -472,9 +526,14 @@ export function TerminalPane({
         scrollback,
       }).then((snapshot) => {
         hasCreatedRef.current = true
+        setSessionReady(true)
         setError(null)
         if (snapshot) {
-          applySnapshot(snapshot as TerminalSnapshot)
+          applySnapshot(snapshot as TerminalSnapshot, { forceReset: true })
+          const terminal = terminalRef.current
+          if (terminal) {
+            focusTerminalInstance(terminal)
+          }
         }
         if (initialCommand && sentInitialCommandRef.current !== initialCommand) {
           sentInitialCommandRef.current = initialCommand
@@ -483,6 +542,8 @@ export function TerminalPane({
         }
         scheduleResizeSync()
       }).catch((commandError) => {
+        hasCreatedRef.current = false
+        setSessionReady(false)
         setError(commandError instanceof Error ? commandError.message : String(commandError))
       })
     }
@@ -515,14 +576,20 @@ export function TerminalPane({
     return socket.subscribeTerminal(terminalId, {
       onSnapshot: (snapshot) => {
         if (!snapshot) {
+          if (hasCreatedRef.current) {
+            return
+          }
           hasCreatedRef.current = false
+          setSessionReady(false)
           lastAppliedSnapshotKeyRef.current = null
+          lastAppliedStructureKeyRef.current = null
           if (connectionStatus === "connected") {
             scheduleSessionCreate()
           }
           return
         }
         hasCreatedRef.current = true
+        setSessionReady(true)
         setError(null)
         if (applySnapshot(snapshot)) {
           scheduleResizeSync()
@@ -545,12 +612,28 @@ export function TerminalPane({
         }
       },
     })
-  }, [connectionStatus, initialCommand, onInitialCommandSent, projectId, scrollback, socket, terminalId])
+  }, [connectionStatus, directoryAccessible, initialCommand, onInitialCommandSent, projectId, scrollback, socket, terminalId])
+
+  const showBlockedOverlay = Boolean(error)
 
   return (
-    <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-4">
+    <div className="relative flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden pb-4">
       <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden px-3 py-1">
         <div ref={containerRef} className="kanna-terminal min-h-0 min-w-0 flex-1 overflow-hidden w-full" />
+        {!sessionReady && !error ? (
+          <div className="pointer-events-none absolute inset-x-3 inset-y-1 flex items-end justify-start px-2 py-2">
+            <p className="max-w-full rounded-md border border-border/60 bg-background/90 px-2 py-1 text-xs text-muted-foreground shadow-sm">
+              Connecting terminal...
+            </p>
+          </div>
+        ) : null}
+        {showBlockedOverlay ? (
+          <div className="pointer-events-none absolute inset-x-3 inset-y-1 flex items-end justify-start bg-background/35 px-2 py-2">
+            <p className="max-w-full rounded-md border border-destructive/30 bg-background/95 px-2 py-1 text-xs text-destructive shadow-sm">
+              {error}
+            </p>
+          </div>
+        ) : null}
       </div>
       {error ? <div className="px-3 py-1 text-xs text-destructive">Terminal error: {error}</div> : null}
     </div>

@@ -8,8 +8,9 @@ import type {
   SidebarData,
   SidebarProjectGroup,
 } from "../shared/types"
+import { resolveDefaultNewProjectRoot } from "../shared/branding"
 import type { ChatRecord, StoreState } from "./events"
-import { resolveLocalPath } from "./paths"
+import { isProjectDirectoryAccessible, resolveLocalPath } from "./paths"
 import type { ClaudeProviderSnapshot } from "../shared/types"
 import { buildServerProviders, getCachedClaudeProviderSnapshot } from "./claude-provider"
 
@@ -140,7 +141,8 @@ export function deriveSidebarData(
 export function deriveLocalProjectsSnapshot(
   state: StoreState,
   discoveredProjects: Array<{ localPath: string; title: string; modifiedAt: number }>,
-  machineName: string
+  machineName: string,
+  defaultNewProjectRoot: string = resolveDefaultNewProjectRoot()
 ): LocalProjectsSnapshot {
   const projects = new Map<string, LocalProjectsSnapshot["projects"][number]>()
 
@@ -152,6 +154,7 @@ export function deriveLocalProjectsSnapshot(
       source: "discovered",
       lastOpenedAt: project.modifiedAt,
       chatCount: 0,
+      directoryAccessible: isProjectDirectoryAccessible(normalizedPath),
     })
   }
 
@@ -168,6 +171,7 @@ export function deriveLocalProjectsSnapshot(
       source: "saved",
       lastOpenedAt,
       chatCount: chats.length,
+      directoryAccessible: isProjectDirectoryAccessible(project.localPath),
     })
   }
 
@@ -177,6 +181,7 @@ export function deriveLocalProjectsSnapshot(
       displayName: machineName,
       platform: process.platform,
     },
+    defaultNewProjectRoot,
     projects: [...projects.values()].sort((a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0)),
   }
 }
@@ -198,6 +203,7 @@ export function deriveChatSnapshot(
     chatId: chat.id,
     projectId: project.id,
     localPath: project.localPath,
+    directoryAccessible: isProjectDirectoryAccessible(project.localPath),
     title: chat.title,
     status: deriveStatus(chat, activeStatuses.get(chat.id)),
     isDraining: drainingChatIds.has(chat.id),

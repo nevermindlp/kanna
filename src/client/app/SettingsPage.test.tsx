@@ -145,6 +145,10 @@ describe("resolveSettingsSectionId", () => {
     expect(resolveSettingsSectionId("nope")).toBeNull()
     expect(resolveSettingsSectionId(undefined)).toBeNull()
   })
+
+  test("hides changelog when updates are disabled", () => {
+    expect(resolveSettingsSectionId("changelog", { updatesEnabled: false })).toBeNull()
+  })
 })
 
 describe("SkillsSection", () => {

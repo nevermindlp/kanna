@@ -27,6 +27,7 @@ interface AuthStatusResponse {
   authenticated: boolean
   mode?: "single" | "multiuser"
   username?: string
+  updatesEnabled?: boolean
 }
 
 type AppAuthState =
@@ -168,6 +169,7 @@ function PasswordScreen({
 function useAppAuthState() {
   const [state, setState] = useState<AppAuthState>({ status: "checking" })
   const [authMode, setAuthMode] = useState<"single" | "multiuser">("single")
+  const [updatesEnabled, setUpdatesEnabled] = useState(true)
   const retryTimeoutRef = useRef<number | null>(null)
 
   const refresh = useCallback(async () => {
@@ -203,6 +205,7 @@ function useAppAuthState() {
 
     const payload = await response.json() as Partial<AuthStatusResponse>
     setAuthMode(payload.mode === "multiuser" ? "multiuser" : "single")
+    setUpdatesEnabled(payload.updatesEnabled !== false)
     setState(getAppAuthStateFromStatus(payload))
   }, [])
 
@@ -263,13 +266,20 @@ function useAppAuthState() {
   return {
     state,
     authMode,
+    updatesEnabled,
     submitPassword,
     submitLogin,
     submitRegister,
   }
 }
 
-export function shouldRedirectToChangelog(pathname: string, currentVersion: string, seenVersion: string | null) {
+export function shouldRedirectToChangelog(
+  pathname: string,
+  currentVersion: string,
+  seenVersion: string | null,
+  updatesEnabled = true,
+) {
+  if (!updatesEnabled) return false
   return pathname === "/" && Boolean(currentVersion) && seenVersion !== currentVersion
 }
 
@@ -281,11 +291,11 @@ export function shouldPlayChatNotificationSound(
   return Boolean(appSettings) && shouldPlayChatSound(preference, doc)
 }
 
-function KannaLayout() {
+function KannaLayout({ updatesEnabled }: { updatesEnabled: boolean }) {
   const location = useLocation()
   const navigate = useNavigate()
   const params = useParams()
-  const state = useKannaState(params.chatId ?? null)
+  const state = useKannaState(params.chatId ?? null, updatesEnabled)
   const chatSoundPreference = useChatSoundPreferencesStore((store) => store.chatSoundPreference)
   const chatSoundId = useChatSoundPreferencesStore((store) => store.chatSoundId)
   const showMobileOpenButton = location.pathname === "/"
@@ -362,6 +372,7 @@ function KannaLayout() {
       onHideProject={handleSidebarHideProject}
       onReorderProjectGroups={handleSidebarReorderProjectGroups}
       editorLabel={state.editorLabel}
+      updatesEnabled={updatesEnabled}
       updateSnapshot={state.updateSnapshot}
       onOpenChangelog={handleOpenChangelog}
     />
@@ -395,15 +406,16 @@ function KannaLayout() {
     state.sidebarOpen,
     state.sidebarReady,
     state.updateSnapshot,
+    updatesEnabled,
   ])
 
   useEffect(() => {
     const seenVersion = window.localStorage.getItem(VERSION_SEEN_STORAGE_KEY)
-    const shouldRedirect = shouldRedirectToChangelog(location.pathname, currentVersion, seenVersion)
+    const shouldRedirect = shouldRedirectToChangelog(location.pathname, currentVersion, seenVersion, updatesEnabled)
     window.localStorage.setItem(VERSION_SEEN_STORAGE_KEY, currentVersion)
     if (!shouldRedirect) return
     navigate("/settings/changelog", { replace: true })
-  }, [currentVersion, location.pathname, navigate])
+  }, [currentVersion, location.pathname, navigate, updatesEnabled])
 
   useLayoutEffect(() => {
     document.title = APP_NAME
@@ -489,7 +501,7 @@ export function App() {
     <TooltipProvider>
       <AppDialogProvider>
         <Routes>
-          <Route element={<KannaLayout />}>
+          <Route element={<KannaLayout updatesEnabled={auth.updatesEnabled} />}>
             <Route path="/" element={<LocalProjectsPage />} />
             <Route path="/settings" element={<Navigate to="/settings/general" replace />} />
             <Route path="/settings/:sectionId" element={<SettingsPage />} />

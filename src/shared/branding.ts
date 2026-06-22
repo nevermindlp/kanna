@@ -10,6 +10,17 @@ export const APP_VERSION = pkg.version
 export const SDK_CLIENT_APP = `kanna/${pkg.version}`
 export const LOG_PREFIX = "[kanna]"
 export const DEFAULT_NEW_PROJECT_ROOT = `~/${APP_NAME}`
+export const KANNA_PROJECT_ROOT_ENV_VAR = "KANNA_PROJECT_ROOT"
+export const KANNA_DISABLE_UPDATES_ENV_VAR = "KANNA_DISABLE_UPDATES"
+export const KANNA_DISABLE_SELF_UPDATE_ENV_VAR = "KANNA_DISABLE_SELF_UPDATE"
+
+export function resolveDefaultNewProjectRoot(env: RuntimeEnv = getRuntimeEnv()): string {
+  const override = env?.[KANNA_PROJECT_ROOT_ENV_VAR]?.trim()
+  if (override) {
+    return override
+  }
+  return DEFAULT_NEW_PROJECT_ROOT
+}
 
 export type RuntimeProfile = "dev" | "prod"
 
@@ -82,4 +93,14 @@ export function getClaudeProviderFilePathDisplay(env: RuntimeEnv = getRuntimeEnv
 
 export function getCliInvocation(arg?: string) {
   return arg ? `${CLI_COMMAND} ${arg}` : CLI_COMMAND
+}
+
+export function resolveUpdatesEnabled(env: RuntimeEnv = getRuntimeEnv()): boolean {
+  if (env?.[KANNA_DISABLE_UPDATES_ENV_VAR]?.trim() === "1") {
+    return false
+  }
+  if (env?.[KANNA_DISABLE_SELF_UPDATE_ENV_VAR]?.trim() === "1") {
+    return false
+  }
+  return true
 }

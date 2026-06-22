@@ -6,6 +6,7 @@ import {
   getKeybindingsFilePath,
   getKeybindingsFilePathDisplay,
   getRuntimeProfile,
+  resolveUpdatesEnabled,
 } from "./branding"
 
 describe("runtime profile helpers", () => {
@@ -27,5 +28,16 @@ describe("runtime profile helpers", () => {
     expect(getDataDirDisplay(env)).toBe("~/.kanna-dev/data")
     expect(getKeybindingsFilePath("/tmp/home", env)).toBe("/tmp/home/.kanna-dev/keybindings.json")
     expect(getKeybindingsFilePathDisplay(env)).toBe("~/.kanna-dev/keybindings.json")
+  })
+})
+
+describe("resolveUpdatesEnabled", () => {
+  test("defaults to enabled when unset", () => {
+    expect(resolveUpdatesEnabled({})).toBe(true)
+  })
+
+  test("disables updates when KANNA_DISABLE_UPDATES or KANNA_DISABLE_SELF_UPDATE is set", () => {
+    expect(resolveUpdatesEnabled({ KANNA_DISABLE_UPDATES: "1" })).toBe(false)
+    expect(resolveUpdatesEnabled({ KANNA_DISABLE_SELF_UPDATE: "1" })).toBe(false)
   })
 })

@@ -69,6 +69,7 @@ interface KannaSidebarProps {
   onHideProject: (projectId: string) => void
   onReorderProjectGroups: (projectIds: string[]) => void
   editorLabel: string
+  updatesEnabled: boolean
   updateSnapshot: UpdateSnapshot | null
   onOpenChangelog: () => void
 }
@@ -101,6 +102,7 @@ function KannaSidebarImpl({
   onHideProject,
   onReorderProjectGroups,
   editorLabel,
+  updatesEnabled,
   updateSnapshot,
   onOpenChangelog,
 }: KannaSidebarProps) {
@@ -348,11 +350,11 @@ function KannaSidebarImpl({
   const isConnecting = connectionStatus === "connecting" || !ready
   const statusLabel = isConnecting ? "Connecting" : connectionStatus === "connected" ? "Connected" : "Disconnected"
   const statusDotClass = connectionStatus === "connected" ? "bg-emerald-500" : "bg-amber-500"
-  const showUpdateButton = updateSnapshot?.updateAvailable === true
-  const showDevBadge = updateSnapshot
+  const showUpdateButton = updatesEnabled && updateSnapshot?.updateAvailable === true
+  const showDevBadge = updatesEnabled && updateSnapshot
     ? updateSnapshot.latestVersion === `${updateSnapshot.currentVersion}-dev`
     : false
-  const isUpdating = updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending"
+  const isUpdating = updatesEnabled && (updateSnapshot?.status === "updating" || updateSnapshot?.status === "restart_pending")
 
   return (
     <>

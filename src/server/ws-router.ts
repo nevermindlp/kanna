@@ -22,7 +22,7 @@ import {
 import { openExternal } from "./external-open"
 import { KeybindingsManager } from "./keybindings"
 import { killLocalHttpServer, listLocalHttpServers } from "./local-http-servers"
-import { ensureProjectDirectory, resolveLocalPath } from "./paths"
+import { assertProjectDirectoryExists, ensureProjectDirectory, resolveLocalPath } from "./paths"
 import { readProjectQuickActions, writeProjectQuickActions } from "./project-quick-actions"
 import { writeStandaloneTranscriptExport } from "./standalone-export"
 import { TerminalManager } from "./terminal-manager"
@@ -1244,10 +1244,10 @@ export function createWsRouter({
             : {
                 currentVersion: "unknown",
                 latestVersion: null,
-                status: "error",
+                status: "up_to_date",
                 updateAvailable: false,
                 lastCheckedAt: Date.now(),
-                error: "Update manager unavailable.",
+                error: null,
                 installAction: "restart",
                 reloadRequestedAt: null,
               }
@@ -1256,7 +1256,7 @@ export function createWsRouter({
         }
         case "update.install": {
           if (!updateManager) {
-            throw new Error("Update manager unavailable.")
+            throw new Error("Updates are disabled.")
           }
           const result = await updateManager.installUpdate()
           send(ws, {
@@ -1732,6 +1732,7 @@ export function createWsRouter({
           if (!project) {
             throw new Error("Project not found")
           }
+          await assertProjectDirectoryExists(project.localPath)
           const snapshot = terminals.createTerminal({
             projectPath: project.localPath,
             terminalId: command.terminalId,
@@ -1740,6 +1741,7 @@ export function createWsRouter({
             scrollback: command.scrollback,
           })
           send(ws, { v: PROTOCOL_VERSION, type: "ack", id, result: snapshot })
+          pushTerminalSnapshot(command.terminalId)
           return
         }
         case "terminal.input": {

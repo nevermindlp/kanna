@@ -1,7 +1,7 @@
 import process from "node:process"
 import { spawnSync } from "node:child_process"
 import { hasCommand, spawnDetached } from "./process-utils"
-import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME } from "../shared/branding"
+import { APP_NAME, CLI_COMMAND, getDataDirDisplay, LOG_PREFIX, PACKAGE_NAME, resolveUpdatesEnabled } from "../shared/branding"
 import type { ShareMode } from "../shared/share"
 import { assertNoHostOverride, getShareCliFlag, isShareEnabled, isTokenShareMode } from "../shared/share"
 import type { UpdateInstallErrorCode } from "../shared/types"
@@ -274,13 +274,15 @@ export async function runCli(argv: string[], deps: CliRuntimeDeps): Promise<CliR
     ...parsedArgs.options,
     trustProxy: isShareEnabled(parsedArgs.options.share) || resolveTrustProxy(),
     onMigrationProgress: deps.log,
-    update: {
-      version: deps.version,
-      fetchLatestVersion: deps.fetchLatestVersion,
-      installVersion: deps.installVersion,
-      argv,
-      command: CLI_COMMAND,
-    },
+    ...(resolveUpdatesEnabled() ? {
+      update: {
+        version: deps.version,
+        fetchLatestVersion: deps.fetchLatestVersion,
+        installVersion: deps.installVersion,
+        argv,
+        command: CLI_COMMAND,
+      },
+    } : {}),
   })
   const bindHost = parsedArgs.options.host
   const displayHost = isShareEnabled(parsedArgs.options.share) || bindHost === "127.0.0.1" || bindHost === "0.0.0.0" ? "localhost" : bindHost
